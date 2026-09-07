@@ -284,3 +284,16 @@ knowledge-mcp/
 ├── config.yaml
 └── pyproject.toml
 ```
+
+## TODO：持久化知识库
+
+当前实验版本在服务进程内构建本地索引，适合验证检索链路。后续将增加 PostgreSQL + pgvector 持久化实现，使 Ingest 成为可增量、可追踪的入库任务：
+
+- [ ] 新增 `documents`、`nodes`、`node_embeddings`、`ingest_jobs` 和 `index_versions` 表；
+- [ ] 使用 pgvector 的 HNSW 或 IVFFlat 索引保存节点向量；
+- [ ] 使用 PostgreSQL Full Text Search 支撑关键词、错误码和标识符检索；
+- [ ] 支持按 `source_path`、内容哈希和版本进行增量 Ingest、更新与删除；
+- [ ] 将 Vector、BM25 和 Document Repository 保持为存储无关接口，支持后续替换为 Qdrant、Milvus 或 pgvector；
+- [ ] 增加数据库迁移、持久化 Ingest 集成测试和重启恢复验证。
+
+完成后，Knowledge MCP 重启将直接读取已持久化的索引；Agent Runtime 与五个 MCP Tool 的调用协议无需修改。
