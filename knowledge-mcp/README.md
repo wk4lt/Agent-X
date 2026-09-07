@@ -2,6 +2,24 @@
 
 Knowledge MCP 是 TroubleShooter 的独立 RAG 服务。它通过 MCP Streamable HTTP 向 Agent Runtime 提供企业知识、Runbook 和文档上下文；Agent Runtime 不依赖 LlamaIndex、Embedding 模型或向量数据库的具体实现。
 
+## 一键 Ingest
+
+将 Markdown 文档放入 `knowledge/<SUBSYSTEM>/<knowledge_type>/` 后，执行下面的命令即可完成扫描、Metadata 解析、LlamaIndex 分层节点构建和检索索引初始化：
+
+```bash
+./knowledge-mcp/dev.sh ingest
+```
+
+首次使用公开实验语料时，依次执行：
+
+```bash
+./knowledge-mcp/dev.sh setup
+./knowledge-mcp/dev.sh fetch-datasets
+./knowledge-mcp/dev.sh ingest
+```
+
+第一阶段使用本地内存索引：`ingest` 会执行完整导入管线并输出文档、节点统计，用于验证语料和索引构建。新增或更新文档后，重新执行该命令，并重启 `serve` 服务；服务会在首次 MCP 调用时按同一导入管线载入最新内容。该能力只提供给管理员 CLI，不作为 MCP Tool 暴露给 LLM Agent，避免 Agent 错误导入、删除或重建知识库。
+
 ## 架构
 
 ```mermaid
