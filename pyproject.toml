@@ -1,0 +1,34 @@
+[project]
+name = "troubleshooter-agent-harness"
+version = "0.1.0"
+description = "Observable, cancellable single-agent harness"
+requires-python = ">=3.12"
+dependencies = [
+  "aiosqlite>=0.20,<1",
+  "alembic>=1.13,<2",
+  "fastapi>=0.111,<1",
+  "httpx[socks]>=0.27,<1",
+  "pydantic>=2.7,<3",
+  "python-multipart>=0.0.9,<1",
+  "PyYAML>=6,<7",
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "uvicorn[standard]>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["backend*", "contracts*", "harness*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

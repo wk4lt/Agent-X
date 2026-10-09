@@ -1,26 +1,11 @@
-# Python
 __pycache__/
 *.py[cod]
-*.egg-info/
 .venv/
-venv/
-backend/.env
-backend/data/
-backend/logs/
-.run/
-knowledge-mcp/.venv/
-knowledge-mcp/.python-3.12.8/
-knowledge-mcp/datasets/external/*
-!knowledge-mcp/datasets/external/.gitkeep
-knowledge-mcp/knowledge/COMMON/reference/*
-!knowledge-mcp/knowledge/COMMON/reference/opentelemetry_basics.md
-!knowledge-mcp/knowledge/COMMON/reference/.gitkeep
-
-# Node
+.pytest_cache/
 node_modules/
-frontend/react-app/dist/
-
-# OS / editor
-.DS_Store
-.idea/
-.vscode/
+web/dist/
+.env
+.run/
+.data/
+*.egg-info/
+*.tsbuildinfo
