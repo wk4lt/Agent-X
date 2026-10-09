@@ -1,1 +1,0 @@
-{"id":"agent-001","query":"production API started returning 15% 5xx after a deployment","expected_runbook":"high_error_rate","expected_first_tool":"query_deployment_history","tool_results":{"query_deployment_history":{"deployment_found":true}},"expected_next_tool":"search_logs","expected_final_decision":"investigate_deployment_and_logs"}

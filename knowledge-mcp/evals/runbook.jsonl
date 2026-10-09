@@ -1,1 +1,0 @@
-{"id":"runbook-001","query":"Redis connection failed repeatedly","expected_runbook":"redis_connection_failure.md","expected_first_action":"check_redis_status"}

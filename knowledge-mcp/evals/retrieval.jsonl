@@ -1,2 +1,0 @@
-{"id":"rag-001","query":"API error rate suddenly increased after deployment","expected_docs":["high_error_rate.md"],"expected_type":"runbook"}
-{"id":"rag-002","query":"Redis connection failed repeatedly","expected_docs":["redis_connection_failure.md"],"expected_type":"runbook"}
