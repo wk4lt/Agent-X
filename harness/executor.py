@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from contracts.models import (
-    CreateRunRequest, RunStatus, SessionEntry, ToolCall, ToolResult, Usage, new_id,
+    CreateRunRequest, RunStatus, SessionEntry, ToolCall, ToolResult, ToolSpec, Usage, new_id,
 )
 from contracts.session_storage import append_session_log, session_directory
 from harness.context import ContextBudgetExceeded, ContextBuilder
@@ -116,8 +116,10 @@ class RunExecutor:
                     await self._fail(run_id, "budget_exceeded")
                     return
                 turn_id = new_id("turn")
+                await self.emit(run_id, "turn.started", {"turn_id": turn_id, "turn_number": turn_number})
                 active = self.policy.filter(run_tools.catalog)
                 try:
+                    await self.emit(run_id, "context.building", {"turn_id": turn_id, "turn_number": turn_number})
                     async def persist_summary(summary):
                         await self.store.append_summary(run.session_id, summary)
                         if summary.usage:
@@ -141,12 +143,15 @@ class RunExecutor:
                 self._log(run, "context.built", turn_id=turn_id, input_tokens_est=report.input_tokens_est,
                           active_tool_count=len(report.active_tool_names), omitted_entry_count=sum(len(ids) for ids in report.omitted_entry_ids_by_reason.values()))
                 await self.emit(run_id, "context.built", {"turn_id": turn_id, "status": "ready", "input_tokens_before_est": report.input_tokens_before_est, "input_tokens_after_est": report.input_tokens_after_est, "available_input_tokens": report.available_input_tokens, "output_reserve": report.output_reserve, "context_window": report.context_window, "active_tool_names": report.active_tool_names, "omitted_entry_count": sum(len(ids) for ids in report.omitted_entry_ids_by_reason.values()), "tool_result_reduction_count": len(report.tool_result_reductions), "summary_refs": [item.summary_id for item in report.summary_refs]})
+                await self.emit(run_id, "provider.started", {"turn_id": turn_id, "turn_number": turn_number})
                 text, calls, usage = await self._collect_response(run_id, provider_request)
                 run.usages.append(usage)
                 self._log(run, "llm.completed", turn_id=turn_id, ttft_ms=usage.ttft_ms,
                           elapsed_ms=usage.elapsed_ms, finish_reason=usage.finish_reason,
                           tool_call_count=len(calls))
                 await self.emit(run_id, "usage.updated", {"kind": "run", **usage.model_dump(exclude_none=True)})
+                await self.emit(run_id, "provider.completed", {"turn_id": turn_id, "turn_number": turn_number,
+                    "tool_call_count": len(calls), "finish_reason": usage.finish_reason})
                 if calls:
                     tool_calls_used += len(calls)
                     if tool_calls_used > request.budget.max_tool_calls:

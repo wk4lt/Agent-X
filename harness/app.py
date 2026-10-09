@@ -65,7 +65,22 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
 
     def schedule(run_id: str, request: CreateRunRequest) -> None:
         if run_id not in app.state.tasks or app.state.tasks[run_id].done():
-            app.state.tasks[run_id] = asyncio.create_task(executor.execute(run_id, request))
+            task = asyncio.create_task(executor.execute(run_id, request))
+            app.state.tasks[run_id] = task
+
+            def report_background_failure(done: asyncio.Task) -> None:
+                if done.cancelled() or done.exception() is None:
+                    return
+                # The executor normally converts failures into run.failed. This callback
+                # prevents an unexpected outer failure from leaving a Run stuck as running.
+                try:
+                    record = store._runs.get(run_id)  # internal in-memory store, same process
+                    if record and record.status not in {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.interrupted}:
+                        asyncio.create_task(executor._fail(run_id, "executor_internal_error"))
+                except Exception:
+                    pass
+
+            task.add_done_callback(report_background_failure)
 
     @app.post("/internal/runs", dependencies=[Depends(authenticate)], status_code=202)
     async def create_run(request: CreateRunRequest):
