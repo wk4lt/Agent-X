@@ -1,5 +1,5 @@
 [project]
-name = "troubleshooter-agent-harness"
+name = "agent-x"
 version = "0.1.0"
 description = "Observable, cancellable single-agent harness"
 requires-python = ">=3.12"

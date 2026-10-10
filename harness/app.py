@@ -33,7 +33,7 @@ def default_catalog(settings: HarnessSettings) -> ToolCatalog:
 
 def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog | None = None,
                settings: HarnessSettings | None = None) -> FastAPI:
-    app = FastAPI(title="TroubleShooter Harness", version="0.1.0")
+    app = FastAPI(title="Agent-X Harness", version="0.1.0")
     settings = settings or HarnessSettings.from_environment()
     store = InMemorySessionStore()
     policy = ToolPolicy(allow_writes=False)
