@@ -178,3 +178,8 @@ export KNOWLEDGE_MCP_AUTHORIZATION='Bearer ...'
 工具 schema 缓存在进程内，默认 300 秒；每次实际调用建立并关闭独立 MCP 连接，避免并发 Run 共享
 失效会话。配置的 Server 清单可通过 Harness 的 `GET /internal/mcp/servers` 查看；该接口不返回命令
 参数、URL、Header 或环境变量值。未选择声明了 `tool_groups` 的 Skill 时，不会向模型暴露 MCP 工具。
+
+## 业务知识 Wiki MCP
+
+独立的原文 RAG 与 AI Wiki 服务，支持子系统/特性过滤、来源引用和版本校验。
+安装、模型配置和 MCP 接入见 [Business Wiki MCP](services/business-wiki-mcp/README.md)。
