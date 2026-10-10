@@ -1,5 +1,6 @@
 import pytest
 
+from backend.config import HistoryConfigurationError, HistorySettings, bearer_api_key
 from contracts.models import CreateRunRequest
 from harness.config import ConfigurationError, HarnessSettings
 
@@ -29,3 +30,20 @@ def test_internal_run_payload_does_not_override_harness_defaults():
     payload = request.model_dump(mode="json", exclude_unset=True)
     assert "model" not in payload
     assert "budget" not in payload
+
+
+def test_backend_api_keys_are_validated_and_compared(monkeypatch, tmp_path):
+    first = "a" * 32
+    second = "b" * 32
+    monkeypatch.setenv("AGENT_API_KEYS", f"{first}, {second},{first}")
+    settings = HistorySettings.from_environment(base_dir=tmp_path)
+    assert settings.api_keys == (first, second)
+    assert bearer_api_key(f"Bearer {second}", settings.api_keys) == second
+    with pytest.raises(ValueError, match="invalid_api_key"):
+        bearer_api_key("Bearer unknown", settings.api_keys)
+
+
+def test_backend_rejects_short_api_keys(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_API_KEYS", "too-short")
+    with pytest.raises(HistoryConfigurationError, match="at least 32"):
+        HistorySettings.from_environment(base_dir=tmp_path)

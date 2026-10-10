@@ -24,7 +24,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["backend*", "contracts*", "harness*"]
+include = ["agent_x*", "backend*", "contracts*", "harness*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

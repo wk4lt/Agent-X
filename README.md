@@ -11,6 +11,7 @@ Web UI。它基于 `Codex_Agent_Harness_Development_Guide.md` 从零构建，不
 - **流式运行**：Harness 产生标准化事件，Backend 通过 SSE 持续推送到 Web UI。
 - **可追踪上下文**：记录上下文预算、压缩状态、实际 Token 使用量、工具执行和终止原因。
 - **持久会话**：匿名浏览器身份、会话、消息和 Task/Run 映射保存在 SQLite 中。
+- **Python 调用**：Bearer API Key 与轻量客户端复用同一套 Task API，无需绕过 Backend 直连 Harness。
 - **独立工作区**：每个会话有独立文件工作区；上传文件不会被自动放入模型上下文。
 - **Skills**：发现 OpenCode 兼容 `SKILL.md`，按需加载，并对脚本执行施加显式策略、超时和输出限制。
 - **MCP Host**：按 Skill 动态接入外部 MCP Server，并把远端工具统一映射到现有 Tool 执行与审计链路。
@@ -99,6 +100,39 @@ ANON_COOKIE_SECURE=false # HTTPS 部署时设为 true
 Alembic 升级。迁移版本位于 `backend/migrations/`，也可以手动执行
 `python -m backend.migrate`。SQLite 适用于单个 Backend 实例；多实例或高并发写入时，应保留
 同一 Repository/API 契约并切换至 PostgreSQL。
+
+## Python 脚本调用
+
+Backend 的公开 Task API 同时供 Web UI 和 Python Client 使用。先生成一个至少 32 字符的随机 Key，
+并把它配置给 Backend：
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+export AGENT_API_KEYS='将上一步生成的随机值填到这里'
+HARNESS_URL=http://127.0.0.1:8001 uvicorn backend.app:app --port 8000
+```
+
+需要隔离多个脚本用户时，用逗号配置多个 Key。每个 Key 映射为独立且稳定的 principal；原始 Key
+不会写入 SQLite。删除或轮换 Key 后，旧 Key 所属历史仍保留，但无法再通过新 Key 访问。
+
+安装本项目后，脚本可以直接阻塞等待 Agent 最终回答：
+
+```python
+from agent_x import AgentXClient
+
+with AgentXClient("http://127.0.0.1:8000", api_key="你的 API Key") as client:
+    answer = client.ask(
+        "ISPPowerOnSensorT 如何调用设备驱动？",
+        selected_skills=["code-doc"],
+        timeout=300,
+    )
+    print(answer)
+```
+
+`ask()` 内部只组合现有的 `POST /api/tasks` 和 `GET /api/tasks/{task_id}`。如需自行控制生命周期，
+可分别调用 `submit()`、`get_task()`、`wait()` 和 `cancel()`；`submit()` 默认生成
+`Idempotency-Key`，网络重试时也可以显式复用同一个值。实时事件仍可通过现有
+`GET /api/tasks/{task_id}/events` SSE 接口获取。
 
 ## Skills
 

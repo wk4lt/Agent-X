@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, Header, HTTPException, Request, Response, Upl
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.client import HarnessClient
-from backend.config import HistorySettings
+from backend.config import HistorySettings, bearer_api_key
 from backend.db import create_database
 from backend.history import HistoryNotFound, HistoryRepository
 from backend.migrate import run_migrations
@@ -53,8 +53,17 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
     app.state.log_root = logs
 
     @app.middleware("http")
-    async def anonymous_identity(request: Request, call_next):
-        principal_id, issued_token = await app.state.history.resolve_anonymous(request.cookies.get(settings.cookie_name))
+    async def caller_identity(request: Request, call_next):
+        try:
+            api_key = bearer_api_key(request.headers.get("authorization"), settings.api_keys)
+        except ValueError as exc:
+            return Response(status_code=401, content=str(exc), headers={"WWW-Authenticate": "Bearer"})
+        if api_key is not None:
+            request.state.principal_id = await app.state.history.resolve_api_key(api_key)
+            return await call_next(request)
+        principal_id, issued_token = await app.state.history.resolve_anonymous(
+            request.cookies.get(settings.cookie_name)
+        )
         request.state.principal_id = principal_id
         response = await call_next(request)
         if issued_token:

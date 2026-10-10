@@ -1,4 +1,4 @@
-"""Ownership-scoped repository for anonymous conversation history."""
+"""Ownership-scoped repository for browser and API conversation history."""
 from __future__ import annotations
 
 import asyncio
@@ -72,6 +72,15 @@ class HistoryRepository:
                                             expires_at=now + timedelta(days=self.settings.cookie_max_age_days),
                                             last_seen_at=now))
         return principal_id, raw_token
+
+    async def resolve_api_key(self, raw_key: str) -> str:
+        """Map an already-validated API key to a stable principal without storing the key."""
+        principal_id = f"api_{token_hash(raw_key)[:60]}"
+        async with self._write_lock:
+            async with self.sessions.begin() as session:
+                if await session.get(Principal, principal_id) is None:
+                    session.add(Principal(id=principal_id, kind="api", created_at=utcnow()))
+        return principal_id
 
     async def revoke_credential(self, raw_token: str) -> None:
         async with self.sessions.begin() as session:

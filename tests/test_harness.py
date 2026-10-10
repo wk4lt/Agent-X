@@ -1,8 +1,12 @@
 import asyncio
+import time
 
 import pytest
+from fastapi.testclient import TestClient
 
 from contracts.models import CreateRunRequest, ToolCall, ToolResult, ToolSpec, Usage
+from harness.app import create_app
+from harness.config import HarnessSettings
 from harness.context import ContextBuilder
 from harness.executor import RunExecutor
 from harness.provider import ProviderDelta, ScriptedMockProvider
@@ -85,3 +89,27 @@ async def test_runtime_workspace_and_logs_are_isolated_by_session(tmp_path):
     log = (tmp_path / "logs" / run.session_id / f"harness_{run.run_id}.jsonl").read_text()
     assert "run.completed" in log
     assert "do not log this prompt" not in log
+
+
+def test_harness_app_with_runtime_settings_completes_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("LOG_ROOT", str(tmp_path / "logs"))
+    monkeypatch.setenv("SKILL_PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SKILL_GLOBAL_CONFIG_ROOT", str(tmp_path / "config"))
+    app = create_app(settings=HarnessSettings.from_environment())
+
+    with TestClient(app) as client:
+        created = client.post("/internal/runs", json={
+            "task_id": "task_app", "idempotency_key": "app-run", "input": "hello",
+        })
+        assert created.status_code == 202
+        run_id = created.json()["run_id"]
+        for _ in range(100):
+            run = client.get(f"/internal/runs/{run_id}").json()
+            if run["status"] in {"completed", "failed", "cancelled", "interrupted"}:
+                break
+            time.sleep(0.01)
+
+    assert run["status"] == "completed"
+    assert run["final_answer"] == "Mock provider received: hello"
