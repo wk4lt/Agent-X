@@ -40,7 +40,7 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
                 task.cancel()
             await engine.dispose()
 
-    app = FastAPI(title="TroubleShooter Backend", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Agent-X Backend", version="0.1.0", lifespan=lifespan)
     app.state.client = client or HarnessClient()
     app.state.history = HistoryRepository(sessions, settings)
     app.state.persistence_tasks: set[asyncio.Task] = set()
