@@ -1,0 +1,28 @@
+version: 1
+servers:
+  business_wiki:
+    transport: stdio
+    command: /absolute/path/Agent-X/services/business-wiki-mcp/.venv/bin/business-wiki-mcp
+    args: [--db, /absolute/path/data/business-wiki.sqlite3]
+    tool_groups: [business_knowledge]
+    allowed_tools: [knowledge_search, knowledge_read, wiki_lint]
+    risk: read_only
+    parallel_safe: true
+    idempotent: true
+    max_result_bytes: 131072
+    timeout_seconds: 30
+  business_wiki_writer:
+    transport: stdio
+    command: /absolute/path/Agent-X/services/business-wiki-mcp/.venv/bin/business-wiki-mcp
+    args: [--db, /absolute/path/data/business-wiki.sqlite3, --writable]
+    tool_groups: [business_knowledge_maintenance]
+    allowed_tools: [source_ingest, wiki_compile, wiki_propose_update, wiki_apply_update]
+    risk: workspace_write
+    parallel_safe: false
+    idempotent: false
+    max_result_bytes: 131072
+    timeout_seconds: 180
+    env_from:
+      WIKI_LLM_BASE_URL: WIKI_LLM_BASE_URL
+      WIKI_LLM_API_KEY: WIKI_LLM_API_KEY
+      WIKI_LLM_MODEL: WIKI_LLM_MODEL

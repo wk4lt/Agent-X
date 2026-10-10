@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "agent-x-business-wiki-mcp"
+version = "0.1.0"
+description = "Source-grounded business knowledge and LLM Wiki MCP server"
+requires-python = ">=3.12"
+dependencies = ["mcp>=1.30,<2", "openai>=1.40,<3"]
+[project.scripts]
+business-wiki-mcp = "business_wiki.server:main"
+[tool.setuptools.packages.find]
+include = ["business_wiki*"]
