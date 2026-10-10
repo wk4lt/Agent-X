@@ -13,6 +13,7 @@ Web UI。它基于 `Codex_Agent_Harness_Development_Guide.md` 从零构建，不
 - **持久会话**：匿名浏览器身份、会话、消息和 Task/Run 映射保存在 SQLite 中。
 - **独立工作区**：每个会话有独立文件工作区；上传文件不会被自动放入模型上下文。
 - **Skills**：发现 OpenCode 兼容 `SKILL.md`，按需加载，并对脚本执行施加显式策略、超时和输出限制。
+- **MCP Host**：按 Skill 动态接入外部 MCP Server，并把远端工具统一映射到现有 Tool 执行与审计链路。
 - **可替换模型**：支持 OpenAI 兼容接口；本地未配置凭据时使用安全且确定性的 EchoProvider。
 
 ## 架构
@@ -22,7 +23,8 @@ flowchart LR
     UI["Web UI"] --> BFF["Backend / BFF"]
     BFF --> H["Agent-X Harness"]
     H --> LLM["LLM Provider"]
-    H --> Tools["Tools & Skills"]
+    H --> Tools["Local Tools & Skills"]
+    H --> MCP["MCP Servers"]
 ```
 
 | 模块 | 职责 |
@@ -107,3 +109,38 @@ Harness 在每次 Run 开始时，从项目目录下的 `.opencode/skills`、`.c
 `run_skill_script` 是独立的、仅接收 argv 的工具。它只接受已发现的 Skill 名与该 Skill 根目录下的
 相对文件路径，默认只允许 `.py` 和 `.sh`，使用受限环境并施加超时、输出与并发限制。项目 Skill
 脚本默认遵循 `SKILL_SCRIPT_POLICY=ask`；审阅脚本后才能在可信部署中显式改为 `trusted` 或 `allow`。
+
+## MCP 工具接入
+
+Agent-X 当前作为 MCP Host，支持 `stdio` 与 Streamable HTTP 两种客户端传输。它在 Run 开始时根据
+用户选中的 Skill 收集 `tool_groups`，只发现并挂载相应 MCP Server 的工具；远端工具以
+`mcp__<server>__<tool>` 命名，继续复用 `ToolPolicy`、并发限制、超时、结果截断和运行事件。
+
+先复制示例配置：
+
+```bash
+cp mcp_servers.example.yaml mcp_servers.yaml
+```
+
+在需要 MCP 工具的 Skill frontmatter 中声明工具组：
+
+```yaml
+---
+name: code-doc
+description: Search code and documentation.
+tool_groups: [code_doc]
+---
+```
+
+然后在 `mcp_servers.yaml` 中让一个或多个 Server 加入同名工具组。完整的 stdio、Streamable HTTP、
+工具白名单、风险级别和环境变量引用示例见 `mcp_servers.example.yaml`。每个 Server 必须显式声明
+`risk`；未知字段会让 Harness 启动失败。凭据不要直接写入 YAML：
+`env_from` 与 `headers_from_env` 的值是 Agent-X 进程中的环境变量名。例如 HTTP Bearer 值可设置为：
+
+```bash
+export KNOWLEDGE_MCP_AUTHORIZATION='Bearer ...'
+```
+
+工具 schema 缓存在进程内，默认 300 秒；每次实际调用建立并关闭独立 MCP 连接，避免并发 Run 共享
+失效会话。配置的 Server 清单可通过 Harness 的 `GET /internal/mcp/servers` 查看；该接口不返回命令
+参数、URL、Header 或环境变量值。未选择声明了 `tool_groups` 的 Skill 时，不会向模型暴露 MCP 工具。
