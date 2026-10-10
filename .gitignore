@@ -5,6 +5,7 @@ __pycache__/
 node_modules/
 web/dist/
 .env
+mcp_servers.yaml
 .run/
 .data/
 *.egg-info/

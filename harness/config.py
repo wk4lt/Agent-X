@@ -74,6 +74,9 @@ class HarnessSettings:
     tool_timeout_seconds: float
     tool_max_result_bytes: int
     tool_max_concurrency: int
+    mcp_config_path: Path
+    mcp_discovery_timeout_seconds: float
+    mcp_schema_cache_ttl_seconds: float
     context_compaction_trigger_ratio: float
     context_compaction_target_ratio: float
     context_recent_blocks_to_keep: int
@@ -136,6 +139,9 @@ class HarnessSettings:
             tool_timeout_seconds=_seconds("TOOL_TIMEOUT_SECONDS", 30, minimum=0.1, maximum=3_600),
             tool_max_result_bytes=_integer("TOOL_MAX_RESULT_BYTES", 32_768, minimum=256, maximum=10_485_760),
             tool_max_concurrency=_integer("TOOL_MAX_CONCURRENCY", 4, minimum=1, maximum=64),
+            mcp_config_path=Path(os.getenv("MCP_CONFIG_PATH", "mcp_servers.yaml")).expanduser().resolve(),
+            mcp_discovery_timeout_seconds=_seconds("MCP_DISCOVERY_TIMEOUT_SECONDS", 15, minimum=0.1, maximum=300),
+            mcp_schema_cache_ttl_seconds=_seconds("MCP_SCHEMA_CACHE_TTL_SECONDS", 300, minimum=0, maximum=86_400),
             context_compaction_trigger_ratio=trigger,
             context_compaction_target_ratio=target,
             context_recent_blocks_to_keep=_integer("CONTEXT_RECENT_BLOCKS_TO_KEEP", 2, minimum=1, maximum=20),

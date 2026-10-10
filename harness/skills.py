@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from contracts.models import ToolResult
 
 NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+TOOL_GROUP = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 class SkillSummary(BaseModel):
@@ -24,6 +25,7 @@ class SkillSummary(BaseModel):
     description: str
     source: str
     trust_level: str
+    tool_groups: list[str] = Field(default_factory=list)
 
 
 class SkillContent(BaseModel):
@@ -134,7 +136,13 @@ def _parse_skill(path: Path, source: str, trust: str) -> SkillRecord:
     metadata = data.get("metadata")
     if metadata is not None and (not isinstance(metadata, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in metadata.items())):
         raise ValueError("metadata must be a string-to-string map")
-    return SkillRecord(SkillSummary(name=name, description=description, source=source, trust_level=trust), path.parent.resolve(),
+    tool_groups = data.get("tool_groups", [])
+    if (not isinstance(tool_groups, list)
+            or not all(isinstance(item, str) and TOOL_GROUP.fullmatch(item) for item in tool_groups)):
+        raise ValueError("tool_groups must be a list of safe group names")
+    tool_groups = list(dict.fromkeys(tool_groups))
+    return SkillRecord(SkillSummary(name=name, description=description, source=source, trust_level=trust,
+                                    tool_groups=tool_groups), path.parent.resolve(),
                        path.resolve(), hashlib.sha256(raw.encode()).hexdigest())
 
 

@@ -8,6 +8,7 @@ dependencies = [
   "alembic>=1.13,<2",
   "fastapi>=0.111,<1",
   "httpx[socks]>=0.27,<1",
+  "mcp>=2,<3",
   "pydantic>=2.7,<3",
   "python-multipart>=0.0.9,<1",
   "PyYAML>=6,<7",

@@ -9,10 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from contracts.models import (
-    CreateRunRequest, RunStatus, SessionEntry, ToolCall, ToolResult, Usage, new_id,
+    CreateRunRequest, RunStatus, SessionEntry, ToolCall, ToolResult, ToolSpec, Usage, new_id,
 )
 from contracts.session_storage import append_session_log, session_directory
 from harness.context import ContextBudgetExceeded, ContextBuilder
+from harness.mcp_tools import McpToolRegistry
 from harness.provider import ProviderAdapter
 from harness.skills import SkillScriptRunner, discover_skills
 from harness.store import InMemorySessionStore
@@ -29,6 +30,7 @@ class RunExecutor:
     log_root: Path | None = None
     workspace_root: Path | None = None
     settings: object | None = None
+    mcp_registry: McpToolRegistry | None = None
 
     async def execute(self, run_id: str, request: CreateRunRequest) -> None:
         run = await self.store.get_run(run_id)
@@ -54,6 +56,36 @@ class RunExecutor:
             catalog = ToolCatalog()
             for registered in self.tool_executor.catalog.active(allow_writes=True):
                 catalog.register(registered.spec, registered.handler)
+            if self.mcp_registry is not None and request.selected_skills:
+                groups = {
+                    group
+                    for record in snapshot.records.values()
+                    for group in record.summary.tool_groups
+                }
+                selection = await self.mcp_registry.tools_for_groups(groups)
+                for diagnostic in selection.diagnostics:
+                    await self.emit(run_id, "mcp.server.failed", {
+                        "server": diagnostic.server,
+                        "error_code": diagnostic.error_code,
+                    })
+                mounted = []
+                for registered in selection.tools:
+                    try:
+                        catalog.register(registered.spec, registered.handler)
+                    except ValueError:
+                        await self.emit(run_id, "mcp.tool.failed", {
+                            "server": registered.spec.source.removeprefix("mcp:"),
+                            "name": registered.spec.name,
+                            "error_code": "mcp_tool_name_collision",
+                        })
+                        continue
+                    mounted.append(registered)
+                if selection.servers:
+                    await self.emit(run_id, "mcp.tools.mounted", {
+                        "servers": list(selection.servers),
+                        "tool_names": [tool.spec.name for tool in mounted],
+                        "tool_count": len(mounted),
+                    })
             loaded_hashes: set[str] = set()
             runner = SkillScriptRunner(workspace_root=settings.skill_project_root, python=os.getenv("PYTHON_EXECUTABLE", sys.executable),
                 policy=settings.skill_script_policy, allowed_extensions=settings.skill_allowed_extensions,

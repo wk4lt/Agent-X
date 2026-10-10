@@ -1,0 +1,31 @@
+version: 1
+
+servers:
+  # Local MCP server launched as a subprocess for each discovery/tool call.
+  codegraph:
+    transport: stdio
+    command: python
+    args: [tools/codegraph_server.py]
+    cwd: .
+    tool_groups: [code_doc]
+    allowed_tools: [search_symbols, find_references]
+    risk: read_only
+    parallel_safe: true
+    idempotent: true
+    max_concurrency: 4
+    timeout_seconds: 30
+    # Values are read from the Agent-X process environment, never stored here.
+    env_from:
+      CODEGRAPH_API_KEY: CODEGRAPH_API_KEY
+
+  # Deployed MCP server reached over Streamable HTTP.
+  knowledge:
+    transport: streamable_http
+    url: https://mcp.example.com/mcp
+    tool_groups: [knowledge]
+    allowed_tools: [search]
+    risk: read_only
+    parallel_safe: true
+    idempotent: true
+    headers_from_env:
+      Authorization: KNOWLEDGE_MCP_AUTHORIZATION

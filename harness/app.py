@@ -12,6 +12,7 @@ from contracts.models import CreateRunRequest, RunStatus, ToolResult, ToolSpec, 
 from harness.config import HarnessSettings
 from harness.context import ContextBuilder, ContextPolicy, ProviderSummaryGenerator
 from harness.executor import RunExecutor
+from harness.mcp_tools import McpToolRegistry
 from harness.provider import ProviderAdapter, provider_from_settings
 from harness.store import InMemorySessionStore
 from harness.tools import ToolCatalog, ToolExecutor, ToolPolicy
@@ -38,6 +39,13 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
     store = InMemorySessionStore()
     policy = ToolPolicy(allow_writes=False)
     selected_provider = provider or provider_from_settings(settings)
+    mcp_registry = McpToolRegistry.from_file(
+        settings.mcp_config_path,
+        default_timeout_seconds=settings.tool_timeout_seconds,
+        default_max_result_bytes=settings.tool_max_result_bytes,
+        discovery_timeout_seconds=settings.mcp_discovery_timeout_seconds,
+        schema_cache_ttl_seconds=settings.mcp_schema_cache_ttl_seconds,
+    )
     context_policy = ContextPolicy(
         summary_enabled=True,
         compaction_trigger_ratio=settings.context_compaction_trigger_ratio,
@@ -51,10 +59,12 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
     executor = RunExecutor(store, selected_provider,
                            ContextBuilder(policy=context_policy, summary_generator=ProviderSummaryGenerator(selected_provider)),
                            ToolExecutor(catalog or default_catalog(settings), policy, settings.tool_max_concurrency), policy,
-                           log_root=settings.log_root, workspace_root=settings.workspace_root, settings=settings)
+                           log_root=settings.log_root, workspace_root=settings.workspace_root, settings=settings,
+                           mcp_registry=mcp_registry)
     app.state.settings = settings
     app.state.store = store
     app.state.executor = executor
+    app.state.mcp_registry = mcp_registry
     app.state.requests: dict[str, CreateRunRequest] = {}
     app.state.tasks: dict[str, asyncio.Task] = {}
     internal_token = os.getenv("HARNESS_INTERNAL_TOKEN")
@@ -106,6 +116,18 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
         if settings.skill_load_policy == "deny":
             return []
         return [summary.model_dump() for summary in snapshot.summaries()]
+
+    @app.get("/internal/mcp/servers", dependencies=[Depends(authenticate)])
+    async def list_mcp_servers():
+        return [
+            {
+                "name": item.name,
+                "transport": item.transport,
+                "tool_groups": list(item.tool_groups),
+                "enabled": item.enabled,
+            }
+            for item in mcp_registry.summaries()
+        ]
 
     @app.post("/internal/runs/{run_id}/cancel", dependencies=[Depends(authenticate)])
     async def cancel_run(run_id: str):
