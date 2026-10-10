@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,15 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _api_keys() -> tuple[str, ...]:
+    raw = os.getenv("AGENT_API_KEYS", "")
+    keys = tuple(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
+    if any(len(key) < 32 for key in keys):
+        message = "each AGENT_API_KEYS entry must contain at least 32 characters"
+        raise HistoryConfigurationError(message)
+    return keys
+
+
 @dataclass(frozen=True)
 class HistorySettings:
     database_path: Path
@@ -55,6 +65,7 @@ class HistorySettings:
     cookie_secure: bool = False
     cookie_http_only: bool = True
     cookie_same_site: str = "lax"
+    api_keys: tuple[str, ...] = ()
 
     @property
     def database_url(self) -> str:
@@ -89,4 +100,17 @@ class HistorySettings:
             cookie_secure=_bool("ANON_COOKIE_SECURE", False),
             cookie_http_only=_bool("ANON_COOKIE_HTTP_ONLY", True),
             cookie_same_site=same_site,
+            api_keys=_api_keys(),
         )
+
+
+def bearer_api_key(authorization: str | None, allowed_keys: tuple[str, ...]) -> str | None:
+    """Return a validated Bearer key, or None when the request did not attempt API auth."""
+    if authorization is None:
+        return None
+    scheme, separator, credential = authorization.partition(" ")
+    if separator != " " or scheme.lower() != "bearer" or not credential:
+        raise ValueError("invalid_authorization")
+    if not any(secrets.compare_digest(credential, candidate) for candidate in allowed_keys):
+        raise ValueError("invalid_api_key")
+    return credential
