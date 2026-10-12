@@ -117,6 +117,21 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
             return []
         return [summary.model_dump() for summary in snapshot.summaries()]
 
+    @app.get("/internal/skills/{name}", dependencies=[Depends(authenticate)])
+    async def get_skill_content(name: str):
+        if settings.skill_load_policy == "deny":
+            raise HTTPException(403, "skill_load_denied")
+        snapshot = discover_skills(settings.skill_project_root, settings.skill_global_config_root,
+            project_roots=(".opencode/skills", ".claude/skills", ".agents/skills"),
+            global_roots=("opencode/skills", "../.claude/skills", "../.agents/skills"))
+        try:
+            detail = snapshot.load(name)
+        except KeyError as exc:
+            raise HTTPException(404, "skill_not_found") from exc
+        except OSError as exc:
+            raise HTTPException(404, "skill_unavailable") from exc
+        return {"name": detail.name, "content": detail.content}
+
     @app.get("/internal/mcp/servers", dependencies=[Depends(authenticate)])
     async def list_mcp_servers():
         return [

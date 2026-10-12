@@ -222,6 +222,18 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
         except httpx.HTTPError as exc:
             raise HTTPException(502, "harness_unavailable") from exc
 
+    @app.get("/api/skills/{name}")
+    async def get_skill_content(name: str) -> dict:
+        try:
+            detail = await app.state.client.skill_content(name)
+            return {"name": detail["name"], "content": detail["content"]}
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (403, 404):
+                raise HTTPException(exc.response.status_code, "skill_unavailable") from exc
+            raise HTTPException(502, "harness_unavailable") from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, "harness_unavailable") from exc
+
     @app.get("/api/tasks/{task_id}")
     async def get_task(request: Request, task_id: str) -> TaskView:
         mapping = await task_mapping(request, task_id)
