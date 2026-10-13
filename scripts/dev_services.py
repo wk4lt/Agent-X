@@ -162,7 +162,10 @@ class Services:
             for name, port, command, cwd in config["commands"]:
                 env = dict(os.environ, **{MARKER: token,
                            "HARNESS_URL": f"http://127.0.0.1:{config['ports'][0]}",
-                           "BACKEND_PORT": str(config["ports"][1])})
+                           "BACKEND_PORT": str(config["ports"][1]),
+                           # Keep HOST available to application code, but replace
+                           # any inherited machine-hostname value with the bind host.
+                           "HOST": config["host"]})
                 with (logs / f"{name}.log").open("w") as log:
                     child = subprocess.Popen(command, cwd=cwd, env=env, stdout=log,
                                              stderr=subprocess.STDOUT, start_new_session=True)
@@ -212,9 +215,9 @@ def configuration(root: Path) -> dict:
     def setting(name: str, default: str) -> str:
         return os.environ[name] if name in os.environ else file_values.get(name, default)
 
-    # HOST is commonly injected by shells and server environments as the machine
-    # hostname. Only accept it from .env for compatibility; use the namespaced
-    # AGENT_X_HOST for explicit shell overrides.
+    # HOST is also injected by some server environments as the machine hostname.
+    # The project's .env therefore wins over inherited HOST. AGENT_X_HOST remains
+    # available when an explicit one-command override is needed.
     host = os.environ.get(
         "AGENT_X_HOST", file_values.get("AGENT_X_HOST", file_values.get("HOST", "127.0.0.1"))
     )

@@ -70,17 +70,17 @@ Python 热更新，各自只监听本模块和共享 `contracts/`；前端继续
 监听地址、端口和热更新开关可以写入项目根目录的 `.env`：
 
 ```dotenv
-AGENT_X_HOST=0.0.0.0
+HOST=0.0.0.0
 HARNESS_PORT=8001
 BACKEND_PORT=8000
 WEB_PORT=5173
 DEV_RELOAD=1
 ```
 
-配置优先级为 shell 环境变量、`.env`、内置默认值。监听地址使用项目专属的
-`AGENT_X_HOST`，避免系统环境中的通用 `HOST`（通常是机器主机名）覆盖监听配置。
-已有 `.env` 中的 `HOST` 仍可作为兼容配置读取，但 shell 环境中的 `HOST` 会被忽略。
-Web UI 的 `/api` 代理会跟随 `BACKEND_PORT`。临时覆盖配置时可以直接传入环境变量，例如：
+对于监听地址，项目 `.env` 中的 `HOST` 优先于系统继承的同名变量；启动的三个子服务也会收到
+这个 `HOST` 值，因此应用代码可以继续读取它。需要临时覆盖监听地址时使用 `AGENT_X_HOST`，
+避免与服务器用于表示机器名的 `HOST` 冲突。其他配置仍按 shell 环境变量、`.env`、内置默认值
+的顺序取值。Web UI 的 `/api` 代理会跟随 `BACKEND_PORT`。例如：
 
 ```bash
 AGENT_X_HOST=0.0.0.0 HARNESS_PORT=8101 BACKEND_PORT=8100 WEB_PORT=5273 ./dev.sh restart

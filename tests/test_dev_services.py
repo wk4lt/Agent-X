@@ -47,7 +47,8 @@ if name == "web":
     child.wait()
     sys.exit(child.returncode)
 print(json.dumps({"args": args, "harness_url": os.environ.get("HARNESS_URL"),
-                  "backend_port": os.environ.get("BACKEND_PORT")}), flush=True)
+                  "backend_port": os.environ.get("BACKEND_PORT"),
+                  "host": os.environ.get("HOST")}), flush=True)
 if os.environ.get("FAKE_NO_LISTEN") == name:
     time.sleep(60)
 else:
@@ -160,6 +161,7 @@ def test_start_status_restart_changed_ports_and_logs(session):
         assert recorded["args"].count("--reload-dir") == 2
         assert recorded["backend_port"] == session.env["BACKEND_PORT"]
         assert recorded["harness_url"].endswith(session.env["HARNESS_PORT"])
+        assert recorded["host"] == "127.0.0.1"
     overrides = dict(zip(["HARNESS_PORT", "BACKEND_PORT", "WEB_PORT"], map(str, free_ports())))
     second = session.start("restart", LOG_ROOT=str(session.root / "new_logs"), **overrides)
     new = session.state()
