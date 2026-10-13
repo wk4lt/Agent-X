@@ -281,7 +281,7 @@ def test_configuration_reads_dotenv_and_shell_overrides(tmp_path, monkeypatch):
     for key in dev.DEV_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     (tmp_path / ".env").write_text(
-        "HOST=0.0.0.0\n"
+        "AGENT_X_HOST=0.0.0.0\n"
         "HARNESS_PORT=8101\n"
         "BACKEND_PORT=8100 # backend\n"
         "WEB_PORT='5273'\n"
@@ -295,11 +295,15 @@ def test_configuration_reads_dotenv_and_shell_overrides(tmp_path, monkeypatch):
     assert config["logs"] == tmp_path / "var/logs/services"
     assert "--reload" not in config["commands"][0][2]
 
-    monkeypatch.setenv("HOST", "127.0.0.2")
+    # A machine hostname inherited through generic HOST is unrelated to Agent-X.
+    monkeypatch.setenv("HOST", "canpheds15684")
     monkeypatch.setenv("BACKEND_PORT", "8200")
     override = dev.configuration(tmp_path)
-    assert override["host"] == "127.0.0.2"
+    assert override["host"] == "0.0.0.0"
     assert override["ports"] == [8101, 8200, 5273]
+
+    monkeypatch.setenv("AGENT_X_HOST", "127.0.0.2")
+    assert dev.configuration(tmp_path)["host"] == "127.0.0.2"
 
 
 @requires_visible_proc
