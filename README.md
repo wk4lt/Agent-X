@@ -145,6 +145,9 @@ Harness 在每次 Run 开始时，从项目目录下的 `.opencode/skills`、`.c
 只回答已选 Skill 范围内的问题，拒绝无关问题；混合请求只处理相关部分。加载和脚本工具
 也只能访问本次已选 Skill。Web UI 发送后保留已选标签，连续追问时可继续使用或手动更换。
 
+固定的范围和拒答规则统一维护在 `ContextBuilder.system_rules`；执行器仅在 Run 副本中
+追加本次选择的 Skill 元数据，不重复定义固定规则。明显无关的问题直接拒答，无需加载 Skill。
+
 `run_skill_script` 是独立的、仅接收 argv 的工具。它只接受已发现的 Skill 名与该 Skill 根目录下的
 相对文件路径，默认只允许 `.py` 和 `.sh`，使用受限环境并施加超时、输出与并发限制。项目 Skill
 脚本默认遵循 `SKILL_SCRIPT_POLICY=ask`；审阅脚本后才能在可信部署中显式改为 `trusted` 或 `allow`。

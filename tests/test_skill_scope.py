@@ -72,12 +72,15 @@ async def test_scope_is_in_every_turn_and_unselected_skills_are_inaccessible(tmp
     assert len(provider.requests) == 3
     for request in provider.requests:
         rules = request.messages[0]["content"]
-        scope = json.loads(rules.split("Selected skills (JSON data): ")[1])
+        fixed_rules, scope_json = rules.split("\nSelected skills (JSON data): ")
+        assert fixed_rules == original
+        scope = json.loads(scope_json)
         assert scope == [{"name": "code-doc", "description": "Search code documentation."}]
         assert "do not answer it or call tools for it" in rules
         assert "mixed requests" in rules
         assert "Previous turns' skill selections do not authorize" in rules
         assert "load the relevant selected skill" in rules
+        assert "Do not load a skill merely to reject an obviously unrelated request" in rules
     assert executor.context_builder.system_rules == original
     assert all(report.system_chars == len(provider.requests[0].messages[0]["content"]) for report in run.reports)
     entries = await executor.store.session_entries(run.session_id)
