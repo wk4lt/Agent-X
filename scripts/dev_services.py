@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = "AGENT_X_DEV_SESSION"
 STOP_TIMEOUT = 5.0
 START_TIMEOUT = 30.0
+DEV_ENV_KEYS = {"HOST", "HARNESS_PORT", "BACKEND_PORT", "WEB_PORT", "DEV_RELOAD", "LOG_ROOT"}
 
 
 def process_info(pid: int) -> dict | None:
@@ -175,22 +177,48 @@ class Services:
         return state
 
 
+def dotenv_settings(root: Path) -> dict[str, str]:
+    """Read only dev supervisor settings without evaluating shell syntax."""
+    path = root / ".env"
+    if not path.is_file():
+        return {}
+    values = {}
+    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if not separator or key not in DEV_ENV_KEYS:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        elif re.search(r"\s+#", value):
+            value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
+        if not value:
+            raise RuntimeError(f"{path}:{line_number}: {key} must not be empty.")
+        values[key] = value
+    return values
+
+
 def configuration(root: Path) -> dict:
-    host = os.environ.get("HOST", "127.0.0.1")
-    ports = [int(os.environ.get(key, default)) for key, default in
+    file_values = dotenv_settings(root)
+
+    def setting(name: str, default: str) -> str:
+        return os.environ[name] if name in os.environ else file_values.get(name, default)
+
+    host = setting("HOST", "127.0.0.1")
+    ports = [int(setting(key, default)) for key, default in
              [("HARNESS_PORT", "8001"), ("BACKEND_PORT", "8000"), ("WEB_PORT", "5173")]]
     if len(set(ports)) != 3 or any(not 1 <= port <= 65535 for port in ports):
         raise RuntimeError("HARNESS_PORT, BACKEND_PORT and WEB_PORT must be distinct valid ports.")
-    reload = os.environ.get("DEV_RELOAD", "1")
+    reload = setting("DEV_RELOAD", "1")
     if reload not in {"0", "1"}:
         raise RuntimeError("DEV_RELOAD must be 0 or 1.")
-    log_root = os.environ.get("LOG_ROOT")
-    if not log_root and (root / ".env").is_file():
-        for line in (root / ".env").read_text().splitlines():
-            key, sep, value = line.strip().partition("=")
-            if sep and key.strip() == "LOG_ROOT":
-                log_root = value.strip().strip("\"'")
-    logs = Path(log_root or ".data/logs")
+    logs = Path(setting("LOG_ROOT", ".data/logs"))
     if not logs.is_absolute():
         logs = root / logs
     commands = []
