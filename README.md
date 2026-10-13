@@ -67,8 +67,18 @@ Python 热更新，各自只监听本模块和共享 `contracts/`；前端继续
 如不需要 Python 热更新，使用 `DEV_RELOAD=0 ./dev.sh`。Harness 重载会清空进程内的运行状态，
 正在执行的任务会中断；持久化的会话历史仍保留。
 
-可通过 `HARNESS_PORT`、`BACKEND_PORT` 和 `WEB_PORT` 覆盖端口，Web UI 的 `/api` 代理会跟随
-`BACKEND_PORT`。例如：
+监听地址、端口和热更新开关可以写入项目根目录的 `.env`：
+
+```dotenv
+HOST=0.0.0.0
+HARNESS_PORT=8001
+BACKEND_PORT=8000
+WEB_PORT=5173
+DEV_RELOAD=1
+```
+
+配置优先级为 shell 环境变量、`.env`、内置默认值。Web UI 的 `/api` 代理会跟随
+`BACKEND_PORT`。临时覆盖配置时可以直接传入环境变量，例如：
 
 ```bash
 HARNESS_PORT=8101 BACKEND_PORT=8100 WEB_PORT=5273 ./dev.sh restart

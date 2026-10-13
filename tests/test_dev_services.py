@@ -277,6 +277,31 @@ def test_previous_boot_state_is_ignored_and_cross_project_is_rejected(tmp_path):
         manager.read()
 
 
+def test_configuration_reads_dotenv_and_shell_overrides(tmp_path, monkeypatch):
+    for key in dev.DEV_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / ".env").write_text(
+        "HOST=0.0.0.0\n"
+        "HARNESS_PORT=8101\n"
+        "BACKEND_PORT=8100 # backend\n"
+        "WEB_PORT='5273'\n"
+        "DEV_RELOAD=0\n"
+        "LOG_ROOT=var/logs\n"
+        "MODEL_API_KEY=must-not-be-loaded\n"
+    )
+    config = dev.configuration(tmp_path)
+    assert config["host"] == "0.0.0.0"
+    assert config["ports"] == [8101, 8100, 5273]
+    assert config["logs"] == tmp_path / "var/logs/services"
+    assert "--reload" not in config["commands"][0][2]
+
+    monkeypatch.setenv("HOST", "127.0.0.2")
+    monkeypatch.setenv("BACKEND_PORT", "8200")
+    override = dev.configuration(tmp_path)
+    assert override["host"] == "127.0.0.2"
+    assert override["ports"] == [8101, 8200, 5273]
+
+
 @requires_visible_proc
 def test_concurrent_start_does_not_duplicate_services(session):
     outputs = [session.root / "concurrent-1.log", session.root / "concurrent-2.log"]
