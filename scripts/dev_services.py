@@ -21,7 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = "AGENT_X_DEV_SESSION"
 STOP_TIMEOUT = 5.0
 START_TIMEOUT = 30.0
-DEV_ENV_KEYS = {"HOST", "HARNESS_PORT", "BACKEND_PORT", "WEB_PORT", "DEV_RELOAD", "LOG_ROOT"}
+DEV_ENV_KEYS = {
+    "AGENT_X_HOST", "HOST", "HARNESS_PORT", "BACKEND_PORT", "WEB_PORT", "DEV_RELOAD", "LOG_ROOT"
+}
 
 
 def process_info(pid: int) -> dict | None:
@@ -210,7 +212,12 @@ def configuration(root: Path) -> dict:
     def setting(name: str, default: str) -> str:
         return os.environ[name] if name in os.environ else file_values.get(name, default)
 
-    host = setting("HOST", "127.0.0.1")
+    # HOST is commonly injected by shells and server environments as the machine
+    # hostname. Only accept it from .env for compatibility; use the namespaced
+    # AGENT_X_HOST for explicit shell overrides.
+    host = os.environ.get(
+        "AGENT_X_HOST", file_values.get("AGENT_X_HOST", file_values.get("HOST", "127.0.0.1"))
+    )
     ports = [int(setting(key, default)) for key, default in
              [("HARNESS_PORT", "8001"), ("BACKEND_PORT", "8000"), ("WEB_PORT", "5173")]]
     if len(set(ports)) != 3 or any(not 1 <= port <= 65535 for port in ports):
