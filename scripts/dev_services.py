@@ -22,7 +22,7 @@ MARKER = "AGENT_X_DEV_SESSION"
 STOP_TIMEOUT = 5.0
 START_TIMEOUT = 30.0
 DEV_ENV_KEYS = {
-    "AGENT_X_HOST", "HOST", "HARNESS_PORT", "BACKEND_PORT", "WEB_PORT", "DEV_RELOAD", "LOG_ROOT"
+    "AGENT_X_HOST", "HARNESS_PORT", "BACKEND_PORT", "WEB_PORT", "DEV_RELOAD", "LOG_ROOT"
 }
 
 
@@ -162,10 +162,7 @@ class Services:
             for name, port, command, cwd in config["commands"]:
                 env = dict(os.environ, **{MARKER: token,
                            "HARNESS_URL": f"http://127.0.0.1:{config['ports'][0]}",
-                           "BACKEND_PORT": str(config["ports"][1]),
-                           # Keep HOST available to application code, but replace
-                           # any inherited machine-hostname value with the bind host.
-                           "HOST": config["host"]})
+                           "BACKEND_PORT": str(config["ports"][1])})
                 with (logs / f"{name}.log").open("w") as log:
                     child = subprocess.Popen(command, cwd=cwd, env=env, stdout=log,
                                              stderr=subprocess.STDOUT, start_new_session=True)
@@ -215,12 +212,7 @@ def configuration(root: Path) -> dict:
     def setting(name: str, default: str) -> str:
         return os.environ[name] if name in os.environ else file_values.get(name, default)
 
-    # HOST is also injected by some server environments as the machine hostname.
-    # The project's .env therefore wins over inherited HOST. AGENT_X_HOST remains
-    # available when an explicit one-command override is needed.
-    host = os.environ.get(
-        "AGENT_X_HOST", file_values.get("AGENT_X_HOST", file_values.get("HOST", "127.0.0.1"))
-    )
+    host = setting("AGENT_X_HOST", "127.0.0.1")
     ports = [int(setting(key, default)) for key, default in
              [("HARNESS_PORT", "8001"), ("BACKEND_PORT", "8000"), ("WEB_PORT", "5173")]]
     if len(set(ports)) != 3 or any(not 1 <= port <= 65535 for port in ports):

@@ -47,8 +47,7 @@ if name == "web":
     child.wait()
     sys.exit(child.returncode)
 print(json.dumps({"args": args, "harness_url": os.environ.get("HARNESS_URL"),
-                  "backend_port": os.environ.get("BACKEND_PORT"),
-                  "host": os.environ.get("HOST")}), flush=True)
+                  "backend_port": os.environ.get("BACKEND_PORT")}), flush=True)
 if os.environ.get("FAKE_NO_LISTEN") == name:
     time.sleep(60)
 else:
@@ -161,7 +160,6 @@ def test_start_status_restart_changed_ports_and_logs(session):
         assert recorded["args"].count("--reload-dir") == 2
         assert recorded["backend_port"] == session.env["BACKEND_PORT"]
         assert recorded["harness_url"].endswith(session.env["HARNESS_PORT"])
-        assert recorded["host"] == "127.0.0.1"
     overrides = dict(zip(["HARNESS_PORT", "BACKEND_PORT", "WEB_PORT"], map(str, free_ports())))
     second = session.start("restart", LOG_ROOT=str(session.root / "new_logs"), **overrides)
     new = session.state()
@@ -283,7 +281,7 @@ def test_configuration_reads_dotenv_and_shell_overrides(tmp_path, monkeypatch):
     for key in dev.DEV_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     (tmp_path / ".env").write_text(
-        "HOST=0.0.0.0\n"
+        "AGENT_X_HOST=0.0.0.0\n"
         "HARNESS_PORT=8101\n"
         "BACKEND_PORT=8100 # backend\n"
         "WEB_PORT='5273'\n"
@@ -297,8 +295,7 @@ def test_configuration_reads_dotenv_and_shell_overrides(tmp_path, monkeypatch):
     assert config["logs"] == tmp_path / "var/logs/services"
     assert "--reload" not in config["commands"][0][2]
 
-    # A machine hostname inherited through generic HOST must not override the
-    # bind address from .env.
+    # A machine hostname inherited through generic HOST is unrelated to Agent-X.
     monkeypatch.setenv("HOST", "canpheds15684")
     monkeypatch.setenv("BACKEND_PORT", "8200")
     override = dev.configuration(tmp_path)
