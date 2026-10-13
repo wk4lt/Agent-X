@@ -97,11 +97,14 @@ def test_harness_app_with_runtime_settings_completes_run(monkeypatch, tmp_path):
     monkeypatch.setenv("LOG_ROOT", str(tmp_path / "logs"))
     monkeypatch.setenv("SKILL_PROJECT_ROOT", str(tmp_path))
     monkeypatch.setenv("SKILL_GLOBAL_CONFIG_ROOT", str(tmp_path / "config"))
+    skill = tmp_path / ".opencode/skills/demo"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: demo\ndescription: Demo software tasks.\n---\n# Instructions\n")
     app = create_app(settings=HarnessSettings.from_environment())
 
     with TestClient(app) as client:
         created = client.post("/internal/runs", json={
-            "task_id": "task_app", "idempotency_key": "app-run", "input": "hello",
+            "task_id": "task_app", "idempotency_key": "app-run", "input": "hello", "selected_skills": ["demo"],
         })
         assert created.status_code == 202
         run_id = created.json()["run_id"]

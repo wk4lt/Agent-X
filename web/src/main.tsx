@@ -130,7 +130,7 @@ function App() {
       if (!response.ok) throw new Error(`创建失败 (${response.status})`);
       const created = await response.json() as Task;
       setTasks((old) => [created, ...old.filter((task) => task.task_id !== created.task_id)]);
-      setActiveTask(created); setMessages((old) => [...old, { id: `optimistic-${created.task_id}`, sequence: -1, role: "user", content: input, status: "completed" }]); setDraft(""); setSelectedSkills([]); setFiles([]); connect(created.task_id); await loadConversations();
+      setActiveTask(created); setMessages((old) => [...old, { id: `optimistic-${created.task_id}`, sequence: -1, role: "user", content: input, status: "completed" }]); setDraft(""); setFiles([]); connect(created.task_id); await loadConversations();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "创建会话失败。"); setActivity(""); } finally { setIsSending(false); }
   }
   async function cancel() { if (activeTask) await fetch(`/api/tasks/${activeTask.task_id}/cancel`, { method: "POST" }); }
