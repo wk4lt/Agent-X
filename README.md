@@ -140,6 +140,11 @@ Harness 在每次 Run 开始时，从项目目录下的 `.opencode/skills`、`.c
 以及对应的全局目录发现 OpenCode 兼容的 `SKILL.md`；项目级 Skill 优先。模型在调用
 `load_skill` 前只能看到名称和描述，加载说明不会执行脚本。
 
+每次请求必须通过 `selected_skills` 指定 Skill；未选择、选择失效或 Skill 被禁用时，
+直接返回提示，不调用模型或工具。系统提示词在每轮注入本次选择的名称和描述，要求模型
+只回答已选 Skill 范围内的问题，拒绝无关问题；混合请求只处理相关部分。加载和脚本工具
+也只能访问本次已选 Skill。Web UI 发送后保留已选标签，连续追问时可继续使用或手动更换。
+
 `run_skill_script` 是独立的、仅接收 argv 的工具。它只接受已发现的 Skill 名与该 Skill 根目录下的
 相对文件路径，默认只允许 `.py` 和 `.sh`，使用受限环境并施加超时、输出与并发限制。项目 Skill
 脚本默认遵循 `SKILL_SCRIPT_POLICY=ask`；审阅脚本后才能在可信部署中显式改为 `trusted` 或 `allow`。
