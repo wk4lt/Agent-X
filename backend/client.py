@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import quote
 from collections.abc import AsyncIterator
 
 import httpx
@@ -63,6 +64,12 @@ class HarnessClient:
     async def skills(self) -> list[dict]:
         async with self._client() as client:
             response = await client.get(f"{self.base_url}/internal/skills", headers=self.headers)
+            response.raise_for_status()
+            return response.json()
+
+    async def skill_content(self, name: str) -> dict:
+        async with self._client() as client:
+            response = await client.get(f"{self.base_url}/internal/skills/{quote(name, safe='')}", headers=self.headers)
             response.raise_for_status()
             return response.json()
 
