@@ -55,12 +55,30 @@ cd web && npm install && npm run dev
 首次安装好 Python 与 Web 依赖后，也可以一次启动三个服务：
 
 ```bash
-./dev.sh
+./dev.sh          # 启动；已运行时显示状态和重启提示
+./dev.sh restart  # 停止当前项目的旧服务，再以前台模式启动
+./dev.sh stop     # 从另一个终端停止服务
+./dev.sh status   # 查看各服务的状态、端口和进程组
 ```
 
-它会启动 Harness（`8001`）、Backend（`8000`）和 Web UI（`5173`），日志写入
-`LOG_ROOT/services/`；按 `Ctrl+C` 会停止全部子进程。可通过 `HARNESS_PORT`、`BACKEND_PORT`
-和 `WEB_PORT` 覆盖端口。
+`dev.sh` 面向 Linux（包括 WSL），会启动 Harness（`8001`）、Backend（`8000`）和 Web UI（`5173`），
+日志写入 `LOG_ROOT/services/`；按 `Ctrl+C` 会停止全部子进程。Harness、Backend 默认启用
+Python 热更新，各自只监听本模块和共享 `contracts/`；前端继续使用 Vite 热更新。
+如不需要 Python 热更新，使用 `DEV_RELOAD=0 ./dev.sh`。Harness 重载会清空进程内的运行状态，
+正在执行的任务会中断；持久化的会话历史仍保留。
+
+可通过 `HARNESS_PORT`、`BACKEND_PORT` 和 `WEB_PORT` 覆盖端口，Web UI 的 `/api` 代理会跟随
+`BACKEND_PORT`。例如：
+
+```bash
+HARNESS_PORT=8101 BACKEND_PORT=8100 WEB_PORT=5273 ./dev.sh restart
+```
+
+进程记录固定保存在项目的 `.run/dev/`，因此改变日志路径或端口后也能停止旧服务。
+启停操作使用文件锁串行执行，停止时校验项目、系统启动标识、进程启动时间与会话标记，
+先正常终止进程组，超时后再强制清理已确认属于本次会话的子进程。
+端口被其他程序或旧版脚本启动的未登记服务占用时，会报错并提示检查占用情况，不会自动杀掉它们。
+首次切换新版脚本前，请先在旧脚本终端按 `Ctrl+C` 停止原服务。
 
 访问 Vite 输出的地址即可使用 Agent-X。复制 `.env.example` 为 `.env` 后填入模型凭据；
 没有凭据时 Harness 使用 `EchoProvider` 返回安全、确定性的结果。启动时会校验模型设置、HTTPS
