@@ -187,8 +187,10 @@ Skill 的目录名必须与 frontmatter 中的 `name` 一致。模型在调用 `
 固定的范围和拒答规则统一维护在 `ContextBuilder.system_rules`；执行器仅在 Run 副本中
 追加本次选择的 Skill 元数据，不重复定义固定规则。明显无关的问题直接拒答，无需加载 Skill。
 
-`run_skill_script` 是独立的、仅接收 argv 的工具。它只接受已发现的 Skill 名与该 Skill 根目录下的
-相对文件路径，默认只允许 `.py` 和 `.sh`，使用受限环境并施加超时、输出与并发限制。项目 Skill
+`run_skill_script` 是独立的、仅接收 argv 的工具。它只接受已发现的 Skill 名，以及最终解析到该
+Skill 根目录内的脚本路径；允许相对路径、目录内可安全归一化的 `..` 和根目录内绝对路径，但拒绝
+任何最终逃出 Skill 根目录的路径或符号链接。默认只允许 `.py` 和 `.sh`，使用受限环境并施加超时、
+输出与并发限制。项目 Skill
 脚本在当前会话工作区执行，并收到 `AGENT_X_WORKSPACE` 环境变量；默认遵循
 `SKILL_SCRIPT_POLICY=ask`，审阅脚本后才能在可信部署中显式改为 `trusted` 或 `allow`。
 

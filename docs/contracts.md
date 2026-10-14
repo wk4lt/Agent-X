@@ -38,6 +38,9 @@ over SSE; repeated reconnects are de-duplicated by Harness entry ID.
 Skills are discovered at Run start from OpenCode-compatible directories. `list_skills` publishes
 only names/descriptions; `load_skill` is separate and never executes resources. `run_skill_script`
 accepts only `{skill_name, script_path, args, timeout_seconds}` and is subject to its own policy.
+`script_path` may be relative or absolute; the normalized target must remain inside the selected
+Skill root. Missing in-root files return `skill_script_not_found`, while boundary escapes return
+`skill_script_path_forbidden`.
 The current Conversation workspace path is injected as trusted context. Skill scripts use it as their
 working directory and receive it in `AGENT_X_WORKSPACE`; Skill roots remain instruction/resource locations.
 Skill event types include `skill.discovered`, `skill.loaded`, `skill.invalid`,
