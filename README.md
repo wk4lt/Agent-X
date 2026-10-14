@@ -3,7 +3,7 @@
 Agent-X 是一个面向代码、文档与复杂任务的可观察 Agent Runtime。它将可流式交互的 Web UI、
 任务后端与单 Agent Harness 分离，形成从用户输入、工具调用到运行事件的完整闭环。
 
-当前 V1 已包含版本化契约、单 Agent 执行核心、会话历史、OpenCode 兼容 Skills，以及 React
+当前 V1 已包含版本化契约、单 Agent 执行核心、会话历史、项目本地 Skills，以及 React
 Web UI。它基于 `Codex_Agent_Harness_Development_Guide.md` 从零构建，不复用旧实现。
 
 ## 特性
@@ -13,7 +13,7 @@ Web UI。它基于 `Codex_Agent_Harness_Development_Guide.md` 从零构建，不
 - **持久会话**：匿名浏览器身份、会话、消息和 Task/Run 映射保存在 SQLite 中。
 - **Python 调用**：Bearer API Key 与轻量客户端复用同一套 Task API，无需绕过 Backend 直连 Harness。
 - **独立工作区**：每个会话有独立文件工作区；上传文件不会被自动放入模型上下文。
-- **Skills**：发现 OpenCode 兼容 `SKILL.md`，按需加载，并对脚本执行施加显式策略、超时和输出限制。
+- **Skills**：发现项目本地 `SKILL.md`，按需加载，并对脚本执行施加显式策略、超时和输出限制。
 - **MCP Host**：按 Skill 动态接入外部 MCP Server，并把远端工具统一映射到现有 Tool 执行与审计链路。
 - **可替换模型**：支持 OpenAI 兼容接口；本地未配置凭据时使用安全且确定性的 EchoProvider。
 
