@@ -70,50 +70,21 @@ class SkillCatalog:
                             resource_files=files)
 
 
-def _worktree_root(path: Path) -> Path:
-    for current in (path, *path.parents):
-        if (current / ".git").exists():
-            return current
-    return path
-
-
-def discover_skills(project_root: Path, global_config_root: Path, *, project_roots: tuple[str, ...],
-                    global_roots: tuple[str, ...], trusted_project_names: set[str] | None = None) -> SkillCatalog:
-    """Build an immutable snapshot. Project roots win deterministically over global roots."""
+def discover_skills(project_root: Path, *, trusted_project_names: set[str] | None = None) -> SkillCatalog:
+    """Build an immutable snapshot from <project_root>/skills."""
     catalog = SkillCatalog(records={})
-    sources: list[tuple[Path, str, str]] = []
-    root = _worktree_root(project_root.resolve())
-    # Walk from worktree to cwd ordering outer first, then nearer roots override within project.
-    chain = list(reversed([item for item in (project_root.resolve(), *project_root.resolve().parents) if item.is_relative_to(root)]))
-    for base in chain:
-        for relative in project_roots:
-            sources.append((base / relative, "project", "untrusted"))
-    for relative in global_roots:
-        sources.append((global_config_root / relative, "global", "trusted"))
-    # Later project locations override earlier ones; globals only fill gaps.
-    for directory, source, trust in sources:
-        if not directory.is_dir():
+    directory = project_root.resolve() / "skills"
+    if not directory.is_dir():
+        return catalog
+    for skill_md in sorted(directory.glob("*/SKILL.md")):
+        try:
+            trust = "trusted" if skill_md.parent.name in (trusted_project_names or set()) else "untrusted"
+            record = _parse_skill(skill_md, "project", trust)
+        except ValueError as exc:
+            catalog.diagnostics.append(SkillDiagnostic(str(skill_md), "skill_invalid_manifest", str(exc)))
             continue
-        for skill_md in sorted(directory.glob("*/SKILL.md")):
-            try:
-                effective_trust = "trusted" if skill_md.parent.name in (trusted_project_names or set()) else trust
-                record = _parse_skill(skill_md, source, effective_trust)
-            except ValueError as exc:
-                catalog.diagnostics.append(SkillDiagnostic(str(skill_md), "skill_invalid_manifest", str(exc)))
-                continue
-            existing = catalog.records.get(record.summary.name)
-            if existing:
-                if source == "project" and existing.summary.source == "global":
-                    catalog.records[record.summary.name] = record
-                elif source == existing.summary.source == "project":
-                    catalog.diagnostics.append(SkillDiagnostic(str(skill_md), "skill_ambiguous_name", "duplicate project skill; configured root precedence applied"))
-                    catalog.records[record.summary.name] = record
-                else:
-                    catalog.diagnostics.append(SkillDiagnostic(str(skill_md), "skill_ambiguous_name", "project skill takes precedence"))
-                continue
-            catalog.records[record.summary.name] = record
+        catalog.records[record.summary.name] = record
     return catalog
-
 
 def _parse_skill(path: Path, source: str, trust: str) -> SkillRecord:
     raw = path.read_text(encoding="utf-8")
