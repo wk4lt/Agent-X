@@ -19,7 +19,7 @@ def make_executor(tmp_path, provider, *, denied=False):
         skill.mkdir(parents=True, exist_ok=True)
         (skill / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n# {name} instructions\n")
     settings = replace(HarnessSettings.from_environment(), skill_project_root=tmp_path,
-                       skill_global_config_root=tmp_path / "global", skill_load_policy="deny" if denied else "allow")
+                       skill_load_policy="deny" if denied else "allow")
     store = InMemorySessionStore()
     policy = ToolPolicy()
     return RunExecutor(store, provider, ContextBuilder(), ToolExecutor(ToolCatalog(), policy), policy, settings=settings)
