@@ -95,6 +95,11 @@ AGENT_X_HOST=0.0.0.0 HARNESS_PORT=8101 BACKEND_PORT=8100 WEB_PORT=5273 ./dev.sh 
 没有凭据时 Harness 使用 `EchoProvider` 返回安全、确定性的结果。启动时会校验模型设置、HTTPS
 基础地址、上下文窗口、输出预留、工具结果上限、超时和并发配置；密钥不会写入日志。
 
+OpenAI 兼容 Provider 默认最多尝试 3 次，并对连接错误、超时、`408/429/5xx`，以及明确返回
+“model does not exist”的 `404` 使用指数退避。重试只会发生在尚未向客户端输出任何流式内容时，
+避免产生重复文本或重复 Tool Call。可通过 `LLM_MAX_ATTEMPTS`、
+`LLM_RETRY_BASE_DELAY_SECONDS` 和 `LLM_RETRY_MAX_DELAY_SECONDS` 调整。
+
 ## 测试
 
 ```bash

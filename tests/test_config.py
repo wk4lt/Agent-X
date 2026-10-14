@@ -25,6 +25,17 @@ def test_settings_exposes_tool_and_context_limits(monkeypatch):
     assert settings.tool_max_result_bytes == 4096
 
 
+def test_settings_exposes_provider_retry_policy(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_MAX_ATTEMPTS", "4")
+    monkeypatch.setenv("LLM_RETRY_BASE_DELAY_SECONDS", "0.25")
+    monkeypatch.setenv("LLM_RETRY_MAX_DELAY_SECONDS", "2")
+    settings = HarnessSettings.from_environment()
+    assert settings.llm_max_attempts == 4
+    assert settings.llm_retry_base_delay_seconds == 0.25
+    assert settings.llm_retry_max_delay_seconds == 2
+
+
 def test_internal_run_payload_does_not_override_harness_defaults():
     request = CreateRunRequest(task_id="task_1", idempotency_key="request_1", input="hello")
     payload = request.model_dump(mode="json", exclude_unset=True)
