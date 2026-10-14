@@ -1,9 +1,10 @@
 import asyncio
+import json
 
 import pytest
 
 from contracts.models import DerivedSummary, RunBudget, SessionEntry, ToolCall, ToolResult, ToolSpec, Usage
-from harness.context import ContextBudgetExceeded, ContextBuilder, ContextPolicy, SummaryGenerator
+from harness.context import ContextBudgetExceeded, ContextBuilder, ContextPolicy, ProviderSummaryGenerator, SummaryGenerator
 from harness.executor import RunExecutor
 from harness.provider import ProviderDelta, ScriptedMockProvider
 from harness.store import InMemorySessionStore
@@ -37,6 +38,64 @@ class StubSummary:
 
 
 @pytest.mark.asyncio
+async def test_provider_summary_only_marks_entries_fully_sent_to_model():
+    provider = ScriptedMockProvider([[ProviderDelta(text="summary")]])
+    generator = ProviderSummaryGenerator(provider)
+    entries = [
+        SessionEntry(role="user", content="A" * 500),
+        SessionEntry(role="assistant", content="B" * 500),
+        SessionEntry(role="user", content="C" * 500),
+    ]
+
+    summary = await generator.summarize(
+        entries=entries, model="mock", target_tokens=50, max_input_tokens=200,
+        max_output_tokens=100, timeout_seconds=1,
+    )
+
+    sent = json.loads(provider.requests[0].messages[1]["content"])["entries"]
+    assert [item["entry_id"] for item in sent] == [entries[0].id]
+    assert summary.source_entry_ids == [entries[0].id]
+    assert sent[0]["content"] == entries[0].content
+
+
+@pytest.mark.asyncio
+async def test_tool_schemas_are_canonical_and_sorted_by_name():
+    async def noop(arguments):
+        return ToolResult(ok=True, content="ok")
+
+    first = ToolCatalog()
+    first.register(ToolSpec(
+        name="zeta", description="z", input_schema={
+            "properties": {"b": {"type": "string"}, "a": {"type": "integer"}},
+            "type": "object",
+        },
+    ), noop)
+    first.register(ToolSpec(name="alpha", description="a", input_schema={"type": "object"}), noop)
+    second = ToolCatalog()
+    second.register(ToolSpec(name="alpha", description="a", input_schema={"type": "object"}), noop)
+    second.register(ToolSpec(
+        name="zeta", description="z", input_schema={
+            "type": "object",
+            "properties": {"a": {"type": "integer"}, "b": {"type": "string"}},
+        },
+    ), noop)
+    builder = ContextBuilder(policy=ContextPolicy(summary_enabled=False))
+    entries = [SessionEntry(role="user", content="question")]
+
+    request_a, _ = await builder.build(
+        task_id="task", run_id="run", turn_id="one", model="mock", entries=entries,
+        tools=first.active(), budget=budget(),
+    )
+    request_b, _ = await builder.build(
+        task_id="task", run_id="run", turn_id="two", model="mock", entries=entries,
+        tools=second.active(), budget=budget(),
+    )
+
+    assert request_a.tools == request_b.tools
+    assert [item["function"]["name"] for item in request_a.tools] == ["alpha", "zeta"]
+
+
+@pytest.mark.asyncio
 async def test_context_keeps_tool_call_result_pair_and_counts_structured_fields():
     call = ToolCall(name="lookup", arguments={"query": "x" * 600})
     entries = [SessionEntry(role="user", content="find a fact"), SessionEntry(role="assistant", content="", tool_calls=[call]),
@@ -55,6 +114,66 @@ async def test_context_keeps_tool_call_result_pair_and_counts_structured_fields(
 
 
 @pytest.mark.asyncio
+async def test_context_never_reorders_latest_user_behind_earlier_tool_rounds():
+    current_user = SessionEntry(role="user", content="current question")
+    entries = [
+        SessionEntry(role="user", content="older question"),
+        SessionEntry(role="assistant", content="older answer"),
+        current_user,
+    ]
+    calls = []
+    for index in range(1, 4):
+        call = ToolCall(id=f"call-{index}", name="lookup", arguments={"round": index})
+        calls.append(call)
+        entries.extend([
+            SessionEntry(role="assistant", tool_calls=[call]),
+            SessionEntry(role="tool", content=f"result-{index}", tool_call_id=call.id,
+                         tool_name=call.name),
+        ])
+
+    builder = ContextBuilder(policy=ContextPolicy(summary_enabled=False, recent_blocks_to_keep=2))
+    request, _ = await builder.build(
+        task_id="task", run_id="run", turn_id="turn", model="mock",
+        entries=entries, tools=[], budget=budget(),
+    )
+
+    history = request.messages[2:]
+    assert [message["role"] for message in history] == [entry.role for entry in entries]
+    current_user_index = next(
+        index for index, message in enumerate(history)
+        if message["role"] == "user" and message["content"] == current_user.content
+    )
+    first_tool_call_index = next(
+        index for index, message in enumerate(history)
+        if message.get("tool_calls") and message["tool_calls"][0]["id"] == calls[0].id
+    )
+    assert current_user_index < first_tool_call_index
+
+
+@pytest.mark.asyncio
+async def test_context_repairs_dangling_tool_call_before_provider_request():
+    call = ToolCall(id="dangling-call", name="lookup", arguments={"query": "x"})
+    entries = [
+        SessionEntry(role="user", content="question"),
+        SessionEntry(role="assistant", tool_calls=[call]),
+        SessionEntry(role="user", content="follow-up"),
+    ]
+    builder = ContextBuilder(policy=ContextPolicy(summary_enabled=False))
+
+    request, _ = await builder.build(
+        task_id="task", run_id="run", turn_id="turn", model="mock",
+        entries=entries, tools=[], budget=budget(),
+    )
+
+    call_index = next(index for index, message in enumerate(request.messages)
+                      if message.get("tool_calls"))
+    result = request.messages[call_index + 1]
+    assert result["role"] == "tool"
+    assert result["tool_call_id"] == call.id
+    assert json.loads(result["content"])["error_code"] == "tool_interrupted"
+
+
+@pytest.mark.asyncio
 async def test_budget_trims_large_tool_result_without_mutating_session_log():
     call = ToolCall(name="lookup", arguments={"query": "q"})
     original = "tool-output-" * 600
@@ -68,6 +187,32 @@ async def test_budget_trims_large_tool_result_without_mutating_session_log():
     assert entries[2].content == original
     assert report.tool_result_reductions[0].entry_id == entries[2].id
     assert report.input_tokens_after_est < report.input_tokens_before_est
+
+
+@pytest.mark.asyncio
+async def test_tool_result_projection_stays_valid_json_even_when_recent():
+    call = ToolCall(name="lookup", arguments={"query": "q"})
+    original = ToolResult(ok=True, content="A" * 2_000).model_dump_json()
+    entries = [
+        SessionEntry(role="user", content="latest request"),
+        SessionEntry(role="assistant", tool_calls=[call]),
+        SessionEntry(role="tool", content=original, tool_call_id=call.id, tool_name=call.name),
+    ]
+    builder = ContextBuilder(policy=ContextPolicy(
+        summary_enabled=False, recent_blocks_to_keep=2, tool_result_max_chars=160,
+    ))
+    request, report = await builder.build(
+        task_id="task", run_id="run", turn_id="turn", model="mock",
+        entries=entries, tools=[], budget=budget(),
+    )
+
+    projected = json.loads(next(
+        message["content"] for message in request.messages if message["role"] == "tool"
+    ))
+    assert projected["truncated"] is True
+    assert "tool result truncated" in projected["content"]
+    assert entries[-1].content == original
+    assert report.tool_result_reductions[0].entry_id == entries[-1].id
 
 
 @pytest.mark.asyncio

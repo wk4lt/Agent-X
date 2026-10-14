@@ -87,7 +87,46 @@ async def test_scope_is_in_every_turn_and_unselected_skills_are_inaccessible(tmp
     results = [json.loads(entry.content) for entry in entries if entry.role == "tool"]
     assert [item["name"] for item in json.loads(results[0]["content"])] == ["code-doc"]
     assert results[1]["error_code"] == results[2]["error_code"] == "skill_not_found"
-    assert "# code-doc instructions" in results[3]["content"]
+    assert "loaded into stable session context" in results[3]["content"]
+    assert "# code-doc instructions" in provider.requests[2].messages[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_loaded_skill_is_reused_as_one_session_asset_on_follow_up(tmp_path):
+    provider = ScriptedMockProvider([
+        [ProviderDelta(tool_calls=[ToolCall(name="load_skill", arguments={"name": "code-doc"})])],
+        [ProviderDelta(text="first answer")],
+        [ProviderDelta(text="follow-up answer")],
+    ])
+    executor = make_executor(tmp_path, provider)
+    first_request = CreateRunRequest(
+        task_id="task_first", idempotency_key="first", input="first question",
+        selected_skills=["code-doc"],
+    )
+    first, _ = await executor.store.create_run(first_request.task_id, "first", None)
+    await executor.execute(first.run_id, first_request)
+
+    second_request = CreateRunRequest(
+        task_id="task_second", idempotency_key="second", input="follow-up",
+        selected_skills=["code-doc"], session_id=first.session_id,
+    )
+    second, _ = await executor.store.create_run(
+        second_request.task_id, "second", first.session_id,
+    )
+    await executor.execute(second.run_id, second_request)
+
+    assets = await executor.store.session_context_assets(first.session_id)
+    assert len(assets) == 1
+    assert assets[0].name == "code-doc"
+    assert "# code-doc instructions" in assets[0].content
+    assert "# code-doc instructions" in provider.requests[1].messages[2]["content"]
+    assert "# code-doc instructions" in provider.requests[2].messages[2]["content"]
+    tool_results = [
+        entry for entry in await executor.store.session_entries(first.session_id)
+        if entry.role == "tool" and entry.tool_name == "load_skill"
+    ]
+    assert len(tool_results) == 1
+    assert "# code-doc instructions" not in tool_results[0].content
 
 
 @pytest.mark.asyncio
