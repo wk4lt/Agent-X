@@ -6,7 +6,7 @@ from harness.skills import SkillScriptRunner, discover_skills
 
 
 def write_skill(root, name="demo-skill", description="A valid demo skill."):
-    skill = root / ".opencode" / "skills" / name
+    skill = root / "skills" / name
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\nmetadata:\n  audience: developers\n---\n# Instructions\n")
     return skill
@@ -15,10 +15,10 @@ def write_skill(root, name="demo-skill", description="A valid demo skill."):
 def test_discovery_is_on_demand_and_invalid_manifests_do_not_block(tmp_path):
     (tmp_path / ".git").mkdir()
     skill = write_skill(tmp_path)
-    invalid = tmp_path / ".claude" / "skills" / "bad"
+    invalid = tmp_path / "skills" / "bad"
     invalid.mkdir(parents=True)
     (invalid / "SKILL.md").write_text("---\nname: wrong\n---\n")
-    catalog = discover_skills(tmp_path, tmp_path / "global", project_roots=(".opencode/skills", ".claude/skills"), global_roots=())
+    catalog = discover_skills(tmp_path)
     assert [item.name for item in catalog.summaries()] == ["demo-skill"]
     assert catalog.diagnostics[0].error_code == "skill_invalid_manifest"
     assert "# Instructions" in catalog.load("demo-skill").content
@@ -34,7 +34,7 @@ async def test_script_runner_enforces_containment_argv_output_and_policy(tmp_pat
     (scripts / "echo.py").write_text("import sys\nprint('|'.join(sys.argv[1:]))\n")
     (scripts / "echo.sh").write_text("echo should-not-run\n")
     (scripts / "loud.py").write_text("print('x' * 1000)\n")
-    catalog = discover_skills(tmp_path, tmp_path / "global", project_roots=(".opencode/skills",), global_roots=())
+    catalog = discover_skills(tmp_path)
     record = catalog.records["demo-skill"]
     runner = SkillScriptRunner(workspace_root=tmp_path, python=sys.executable, policy="allow", allowed_extensions=(".py",),
                                default_timeout=2, max_timeout=2, max_output_bytes=20, max_concurrent=1)
