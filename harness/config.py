@@ -65,6 +65,9 @@ class HarnessSettings:
     llm_api_key: str | None
     model: str
     llm_timeout_seconds: float
+    llm_max_attempts: int
+    llm_retry_base_delay_seconds: float
+    llm_retry_max_delay_seconds: float
     context_window: int
     output_reserve: int
     context_safety_margin: int
@@ -109,6 +112,10 @@ class HarnessSettings:
         parsed = urlparse(base_url)
         if provider == "openai_compatible" and (parsed.scheme != "https" or not parsed.netloc):
             raise ConfigurationError("LLM_BASE_URL must be an https URL")
+        retry_base_delay = _seconds("LLM_RETRY_BASE_DELAY_SECONDS", 0.5, minimum=0, maximum=60)
+        retry_max_delay = _seconds("LLM_RETRY_MAX_DELAY_SECONDS", 4, minimum=0, maximum=300)
+        if retry_max_delay < retry_base_delay:
+            raise ConfigurationError("LLM_RETRY_MAX_DELAY_SECONDS must be at least LLM_RETRY_BASE_DELAY_SECONDS")
         context_window = _integer("CONTEXT_WINDOW", 128_000, minimum=1_024, maximum=1_000_000)
         output_reserve = _integer("OUTPUT_TOKEN_RESERVE", 8_192, minimum=1, maximum=384_000)
         safety_margin = _integer("CONTEXT_SAFETY_MARGIN", 1_024, minimum=0, maximum=100_000)
@@ -131,6 +138,9 @@ class HarnessSettings:
             provider=provider, llm_base_url=base_url, llm_api_key=key,
             model=os.getenv("LLM_MODEL", "deepseek-flash"),
             llm_timeout_seconds=_seconds("LLM_TIMEOUT_SECONDS", 90, minimum=1, maximum=600),
+            llm_max_attempts=_integer("LLM_MAX_ATTEMPTS", 3, minimum=1, maximum=10),
+            llm_retry_base_delay_seconds=retry_base_delay,
+            llm_retry_max_delay_seconds=retry_max_delay,
             context_window=context_window, output_reserve=output_reserve, context_safety_margin=safety_margin,
             max_turns=_integer("RUN_MAX_TURNS", 12, minimum=1, maximum=100),
             max_tool_calls=_integer("RUN_MAX_TOOL_CALLS", 32, minimum=0, maximum=500),
