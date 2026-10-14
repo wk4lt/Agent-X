@@ -87,7 +87,6 @@ class HarnessSettings:
     workspace_root: Path
     log_root: Path
     skill_project_root: Path
-    skill_global_config_root: Path
     skill_script_policy: str
     skill_load_policy: str
     skill_allowed_extensions: tuple[str, ...]
@@ -152,7 +151,6 @@ class HarnessSettings:
             workspace_root=Path(os.getenv("WORKSPACE_ROOT", ".data/workspaces")).resolve(),
             log_root=Path(os.getenv("LOG_ROOT", ".data/logs")).resolve(),
             skill_project_root=Path(os.getenv("SKILL_PROJECT_ROOT", ".")).resolve(),
-            skill_global_config_root=Path(os.getenv("SKILL_GLOBAL_CONFIG_ROOT", "~/.config")).expanduser().resolve(),
             skill_script_policy=skill_policy, skill_load_policy=skill_load_policy, skill_allowed_extensions=extensions,
             skill_default_timeout_seconds=_seconds("SKILL_SCRIPT_TIMEOUT_SECONDS", 30, minimum=1, maximum=120),
             skill_max_timeout_seconds=_seconds("SKILL_SCRIPT_MAX_TIMEOUT_SECONDS", 120, minimum=1, maximum=120),
