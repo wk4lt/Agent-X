@@ -12,7 +12,7 @@ from harness.provider import ScriptedMockProvider
 
 def test_skill_preview_returns_full_file_without_running_scripts(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_INTERNAL_TOKEN", "preview-test")
-    skill = tmp_path / ".opencode/skills/demo"
+    skill = tmp_path / "skills/demo"
     skill.mkdir(parents=True)
     content = "---\nname: demo\ndescription: Preview demo\n---\n# Full instructions\n" + "Detail\n" * 1000
     (skill / "SKILL.md").write_text(content)
