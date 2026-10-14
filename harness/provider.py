@@ -106,10 +106,10 @@ class OpenAICompatibleProvider:
                             for item in delta.get("tool_calls") or []:
                                 index = item.get("index", 0)
                                 current = partial_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                                current["id"] += item.get("id", "")
+                                current["id"] += item.get("id") or ""
                                 function = item.get("function") or {}
-                                current["name"] += function.get("name", "")
-                                current["arguments"] += function.get("arguments", "")
+                                current["name"] += function.get("name") or ""
+                                current["arguments"] += function.get("arguments") or ""
         except httpx.HTTPError as exc:
             raise ProviderError("provider_connection_error") from exc
         calls: list[ToolCall] = []
