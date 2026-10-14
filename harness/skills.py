@@ -86,6 +86,7 @@ def discover_skills(project_root: Path, *, trusted_project_names: set[str] | Non
         catalog.records[record.summary.name] = record
     return catalog
 
+
 def _parse_skill(path: Path, source: str, trust: str) -> SkillRecord:
     raw = path.read_text(encoding="utf-8")
     if not raw.startswith("---\n"):
