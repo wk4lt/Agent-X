@@ -132,6 +132,8 @@ class SkillScriptRunner:
             return ToolResult(ok=False, content="Skill script execution requires approval.", error_code="skill_script_approval_required")
         try:
             script = self._script_path(record.root, script_path)
+        except FileNotFoundError as exc:
+            return ToolResult(ok=False, content=str(exc), error_code="skill_script_not_found")
         except ValueError as exc:
             return ToolResult(ok=False, content=str(exc), error_code="skill_script_path_forbidden")
         if script.suffix not in self.allowed_extensions:
@@ -166,10 +168,14 @@ class SkillScriptRunner:
 
     @staticmethod
     def _script_path(root: Path, value: str) -> Path:
+        root = root.resolve()
         candidate = Path(value)
-        if candidate.is_absolute() or ".." in candidate.parts:
-            raise ValueError("Skill script path must be a relative path inside the Skill directory.")
-        resolved = (root / candidate).resolve()
-        if not resolved.is_relative_to(root) or not resolved.is_file():
-            raise ValueError("Skill script was not found inside the Skill directory.")
+        # Accept harmless spelling differences (./, in-root .. segments, or an
+        # absolute path) and enforce the security boundary on the normalized
+        # target instead. resolve() also prevents symlinks escaping the Skill.
+        resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError("Skill script path must resolve inside the current Skill directory.")
+        if not resolved.is_file():
+            raise FileNotFoundError("Skill script was not found inside the current Skill directory.")
         return resolved

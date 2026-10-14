@@ -34,13 +34,21 @@ async def test_script_runner_enforces_containment_argv_output_and_policy(tmp_pat
     (scripts / "echo.py").write_text("import sys\nprint('|'.join(sys.argv[1:]))\n")
     (scripts / "echo.sh").write_text("echo should-not-run\n")
     (scripts / "loud.py").write_text("print('x' * 1000)\n")
+    outside = tmp_path / "outside.py"
+    outside.write_text("print('outside')\n")
+    (scripts / "outside-link.py").symlink_to(outside)
     catalog = discover_skills(tmp_path)
     record = catalog.records["demo-skill"]
     runner = SkillScriptRunner(workspace_root=tmp_path, python=sys.executable, policy="allow", allowed_extensions=(".py",),
                                default_timeout=2, max_timeout=2, max_output_bytes=20, max_concurrent=1)
     result = await runner.run(record, "scripts/echo.py", ["a;not-shell", "b"], None)
     assert result.ok and result.content.strip() == "a;not-shell|b"
+    assert (await runner.run(record, "./scripts/../scripts/echo.py", ["normalized"], None)).ok
+    assert (await runner.run(record, f"../{skill.name}/scripts/echo.py", ["rebased"], None)).ok
+    assert (await runner.run(record, str(scripts / "echo.py"), ["absolute"], None)).ok
     assert (await runner.run(record, "../outside.py", [], None)).error_code == "skill_script_path_forbidden"
+    assert (await runner.run(record, "scripts/outside-link.py", [], None)).error_code == "skill_script_path_forbidden"
+    assert (await runner.run(record, "scripts/missing.py", [], None)).error_code == "skill_script_not_found"
     assert (await runner.run(record, "scripts/echo.sh", [], None)).error_code == "skill_script_runtime_not_allowed"
     loud = await runner.run(record, "scripts/loud.py", [], None)
     assert loud.ok and loud.truncated and len(loud.content.encode()) <= 20
