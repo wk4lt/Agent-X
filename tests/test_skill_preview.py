@@ -19,8 +19,7 @@ def test_skill_preview_returns_full_file_without_running_scripts(tmp_path, monke
     scripts = skill / "scripts"
     scripts.mkdir()
     (scripts / "fail.py").write_text("raise RuntimeError('must not execute')")
-    settings = replace(HarnessSettings.from_environment(), skill_project_root=tmp_path,
-                       skill_global_config_root=tmp_path / "global")
+    settings = replace(HarnessSettings.from_environment(), skill_project_root=tmp_path)
     headers = {"X-Internal-Token": "preview-test"}
     with TestClient(create_harness(settings=settings, provider=ScriptedMockProvider([]))) as browser:
         assert browser.get("/internal/skills/demo").status_code == 401
