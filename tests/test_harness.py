@@ -73,6 +73,36 @@ async def test_context_budget_fails_diagnostically():
 
 
 @pytest.mark.asyncio
+async def test_unexpected_provider_error_has_diagnostic_event_and_traceback(tmp_path):
+    class FailingProvider:
+        async def stream(self, request):
+            raise RuntimeError("connection reset while streaming")
+            yield  # pragma: no cover - makes this an async generator
+
+    store = InMemorySessionStore()
+    policy = ToolPolicy()
+    executor = RunExecutor(store, FailingProvider(), ContextBuilder(), ToolExecutor(ToolCatalog(), policy), policy,
+                           log_root=tmp_path / "logs")
+    request = CreateRunRequest(task_id="task_failure", idempotency_key="failure", input="diagnose")
+    run, _ = await store.create_run(request.task_id, request.idempotency_key, None)
+
+    await executor.execute(run.run_id, request)
+
+    saved = await store.get_run(run.run_id)
+    assert saved.status.value == "failed"
+    assert saved.stop_reason == "provider_error"
+    assert saved.failure_stage == "provider_stream"
+    assert saved.failure_code == "RuntimeError"
+    assert saved.failure_message == "connection reset while streaming"
+    failed = [event for event in await store.events_after(run.run_id) if event.type == "run.failed"][-1]
+    assert failed.payload["error_code"] == "RuntimeError"
+    assert "traceback" not in failed.payload
+    log = (tmp_path / "logs" / run.session_id / f"harness_{run.run_id}.jsonl").read_text()
+    assert '"event":"run.failed"' in log
+    assert "RuntimeError: connection reset while streaming" in log
+
+
+@pytest.mark.asyncio
 async def test_runtime_workspace_and_logs_are_isolated_by_session(tmp_path):
     catalog = ToolCatalog()
     store = InMemorySessionStore()
