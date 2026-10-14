@@ -26,6 +26,9 @@ class RunRecord:
     workspace_id: str | None = None
     status: RunStatus = RunStatus.accepted
     stop_reason: str | None = None
+    failure_stage: str | None = None
+    failure_code: str | None = None
+    failure_message: str | None = None
     final_answer: str | None = None
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime = field(default_factory=utcnow)
@@ -38,7 +41,9 @@ class RunRecord:
     def view(self) -> RunView:
         return RunView(
             run_id=self.run_id, task_id=self.task_id, session_id=self.session_id,
-            status=self.status, stop_reason=self.stop_reason, final_answer=self.final_answer,
+            status=self.status, stop_reason=self.stop_reason, failure_stage=self.failure_stage,
+            failure_code=self.failure_code, failure_message=self.failure_message,
+            final_answer=self.final_answer,
             created_at=self.created_at, updated_at=self.updated_at, workspace_id=self.workspace_id,
         )
 
@@ -90,12 +95,20 @@ class InMemorySessionStore:
         return list(self._summaries.get(session_id, []))
 
     async def update_run(self, run_id: str, *, status: RunStatus | None = None,
-                         stop_reason: str | None = None, final_answer: str | None = None) -> RunRecord:
+                         stop_reason: str | None = None, failure_stage: str | None = None,
+                         failure_code: str | None = None, failure_message: str | None = None,
+                         final_answer: str | None = None) -> RunRecord:
         record = await self.get_run(run_id)
         if status is not None:
             record.status = status
         if stop_reason is not None:
             record.stop_reason = stop_reason
+        if failure_stage is not None:
+            record.failure_stage = failure_stage
+        if failure_code is not None:
+            record.failure_code = failure_code
+        if failure_message is not None:
+            record.failure_message = failure_message
         if final_answer is not None:
             record.final_answer = final_answer
         record.updated_at = utcnow()
