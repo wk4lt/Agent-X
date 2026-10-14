@@ -163,7 +163,7 @@ async def test_real_sdk_stdio_discovery_and_call():
 @pytest.mark.asyncio
 async def test_selected_skill_mounts_its_mcp_tool_for_the_run(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
-    skill = tmp_path / ".opencode" / "skills" / "code-doc"
+    skill = tmp_path / "skills" / "code-doc"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
         "---\nname: code-doc\ndescription: Search code documentation.\n"
@@ -174,7 +174,6 @@ async def test_selected_skill_mounts_its_mcp_tool_for_the_run(tmp_path, monkeypa
     write_config(config)
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("SKILL_PROJECT_ROOT", str(tmp_path))
-    monkeypatch.setenv("SKILL_GLOBAL_CONFIG_ROOT", str(tmp_path / "global"))
     monkeypatch.setenv("MCP_CONFIG_PATH", str(config))
     settings = HarnessSettings.from_environment()
     calls = []
