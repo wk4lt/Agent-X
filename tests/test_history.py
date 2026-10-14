@@ -16,11 +16,14 @@ class FakeHarness:
     def __init__(self) -> None:
         self.created = 0
         self.runs: dict[str, RunView] = {}
+        self.requests = []
 
     async def create_run(self, request):
         self.created += 1
+        self.requests.append(request)
         now = datetime.now(timezone.utc)
-        run = RunView(run_id=f"run_{self.created}", task_id=request.task_id, session_id=f"session_{self.created}",
+        run = RunView(run_id=f"run_{self.created}", task_id=request.task_id,
+                      session_id=request.session_id or f"session_{self.created}",
                       status=RunStatus.accepted, created_at=now, updated_at=now)
         self.runs[run.run_id] = run
         return run
@@ -53,6 +56,21 @@ def test_anonymous_cookie_history_isolated_and_task_retry_is_idempotent(tmp_path
         assert browser.get(f"/api/conversations/{conversation['id']}/messages").status_code == 404
         assert browser.delete(f"/api/conversations/{conversation['id']}").status_code == 404
         assert browser.post(f"/api/tasks/{first.json()['task_id']}/cancel").status_code == 404
+
+
+def test_follow_up_reuses_the_conversation_harness_session(tmp_path):
+    harness = FakeHarness()
+    app = create_app(client=harness, history_settings=settings_for(tmp_path), workspace_root=tmp_path / "work",
+                     log_root=tmp_path / "logs")
+    with TestClient(app) as browser:
+        conversation = browser.post("/api/conversations", json={"title": "continuity"}).json()
+        first = browser.post("/api/tasks", json={"conversation_id": conversation["id"], "input": "记住：代号是青竹"})
+        second = browser.post("/api/tasks", json={"conversation_id": conversation["id"], "input": "代号是什么？"})
+
+    assert first.status_code == second.status_code == 202
+    assert harness.requests[0].session_id is None
+    assert harness.requests[1].session_id == first.json()["run"]["session_id"]
+    assert second.json()["run"]["session_id"] == first.json()["run"]["session_id"]
 
 
 @pytest.mark.asyncio

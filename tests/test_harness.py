@@ -39,6 +39,10 @@ async def test_multi_turn_tool_run_preserves_order_and_events():
     assert saved.final_answer == "done"
     types = [event.type for event in await store.events_after(run.run_id)]
     assert types.index("tool.started") < types.index("tool.completed") < types.index("run.completed")
+    progress = [event.payload for event in await store.events_after(run.run_id) if event.type == "run.progress"]
+    assert any(item["round"] == 1 and item["phase"] == "context" for item in progress)
+    assert any(item["round"] == 1 and item["phase"] == "tools" for item in progress)
+    assert any(item["round"] == 2 and item["phase"] == "answer" for item in progress)
     entries = await store.session_entries(run.session_id)
     assert [entry.role for entry in entries] == ["user", "assistant", "tool", "assistant"]
 
@@ -107,15 +111,20 @@ async def test_runtime_workspace_and_logs_are_isolated_by_session(tmp_path):
     catalog = ToolCatalog()
     store = InMemorySessionStore()
     policy = ToolPolicy()
+    provider = ScriptedMockProvider([[ProviderDelta(text="done")]])
     executor = RunExecutor(
-        store, ScriptedMockProvider([[ProviderDelta(text="done")]]), ContextBuilder(),
+        store, provider, ContextBuilder(),
         ToolExecutor(catalog, policy), policy,
         log_root=tmp_path / "logs", workspace_root=tmp_path / "workspaces",
     )
-    request = CreateRunRequest(task_id="task_logs", idempotency_key="logs", input="do not log this prompt")
-    run, _ = await store.create_run(request.task_id, request.idempotency_key, None)
+    request = CreateRunRequest(task_id="task_logs", idempotency_key="logs", input="do not log this prompt",
+                               workspace_id="conversation_1")
+    run, _ = await store.create_run(request.task_id, request.idempotency_key, None, request.workspace_id)
     await executor.execute(run.run_id, request)
-    assert (tmp_path / "workspaces" / run.session_id).is_dir()
+    workspace = (tmp_path / "workspaces" / "conversation_1").resolve()
+    assert workspace.is_dir()
+    system_messages = [item["content"] for item in provider.requests[0].messages if item["role"] == "system"]
+    assert any(str(workspace) in item and "AGENT_X_WORKSPACE" in item for item in system_messages)
     log = (tmp_path / "logs" / run.session_id / f"harness_{run.run_id}.jsonl").read_text()
     assert "run.completed" in log
     assert "do not log this prompt" not in log

@@ -142,7 +142,11 @@ class SkillScriptRunner:
         command = [self.python, str(script), *args] if script.suffix == ".py" else ["/bin/bash", str(script), *args]
         started = time.perf_counter()
         async with self._semaphore:
-            process = await asyncio.create_subprocess_exec(*command, cwd=str(self.workspace_root), env={"PATH": os.getenv("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"},
+            process = await asyncio.create_subprocess_exec(*command, cwd=str(self.workspace_root), env={
+                                                               "PATH": os.getenv("PATH", "/usr/bin:/bin"),
+                                                               "LANG": "C.UTF-8",
+                                                               "AGENT_X_WORKSPACE": str(self.workspace_root),
+                                                           },
                                                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
             try:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)

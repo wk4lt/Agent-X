@@ -51,7 +51,7 @@ class RunExecutor:
     async def _execute(self, run_id: str, request: CreateRunRequest) -> None:
         run = await self.store.get_run(run_id)
         started = time.monotonic()
-        self._ensure_workspace(run)
+        run_workspace = self._ensure_workspace(run)
         await self.store.update_run(run_id, status=RunStatus.running)
         self._log(run, "run.started", task_id=run.task_id, run_id=run_id, model=request.model)
         await self.emit(run_id, "run.started", {})
@@ -59,6 +59,18 @@ class RunExecutor:
         settings = getattr(self, "settings", None)
         run_tools = self.tool_executor
         run_context = self.context_builder
+        if run_workspace is not None:
+            workspace_instructions = (
+                "Current user workspace (trusted runtime metadata): " + str(run_workspace) + "\n"
+                "Use this directory as the base location for every user-file read, write, and generated artifact. "
+                "Do not read or write user files outside this directory. Skill definitions and bundled Skill "
+                "resources are read-only instructions/resources; do not use the Skill directory as the user workspace. "
+                "Skill scripts run with this directory as cwd and receive the same path in AGENT_X_WORKSPACE."
+            )
+            run_context = replace(
+                run_context,
+                task_constraints="\n".join(filter(None, [run_context.task_constraints, workspace_instructions])),
+            )
         if settings is not None:
             if not request.selected_skills:
                 await self._complete(run_id, "请先选择与问题相关的 Skill，再提交问题。", "skill_selection_required")
@@ -76,8 +88,8 @@ class RunExecutor:
                                 for item in snapshot.summaries()], ensure_ascii=False)
             # Keep scope local to this Run: the builder is shared by concurrent executions.
             run_context = replace(
-                self.context_builder,
-                system_rules=self.context_builder.system_rules + f"\nSelected skills (JSON data): {scope}",
+                run_context,
+                system_rules=run_context.system_rules + f"\nSelected skills (JSON data): {scope}",
             )
             for summary in snapshot.summaries():
                 await self.emit(run_id, "skill.discovered", {"name": summary.name, "source": summary.source,
@@ -118,7 +130,7 @@ class RunExecutor:
                         "tool_count": len(mounted),
                     })
             loaded_hashes: set[str] = set()
-            runner = SkillScriptRunner(workspace_root=settings.skill_project_root, python=os.getenv("PYTHON_EXECUTABLE", sys.executable),
+            runner = SkillScriptRunner(workspace_root=run_workspace or settings.skill_project_root, python=os.getenv("PYTHON_EXECUTABLE", sys.executable),
                 policy=settings.skill_script_policy, allowed_extensions=settings.skill_allowed_extensions,
                 default_timeout=settings.skill_default_timeout_seconds, max_timeout=settings.skill_max_timeout_seconds,
                 max_output_bytes=settings.skill_max_output_bytes, max_concurrent=settings.skill_max_concurrent_scripts_per_run)
@@ -166,7 +178,7 @@ class RunExecutor:
                 input_schema={"type": "object", "properties": {}}, parallel_safe=True), list_skills)
             catalog.register(ToolSpec(name="load_skill", description="Load an available Skill by exact name. Loading does not execute scripts.",
                 input_schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}), load_skill)
-            catalog.register(ToolSpec(name="run_skill_script", description="Execute an allowed script inside a loaded/discovered Skill using argv arguments.",
+            catalog.register(ToolSpec(name="run_skill_script", description="Execute an allowed script inside a loaded/discovered Skill using argv arguments. The current user workspace is the process cwd and is also available as AGENT_X_WORKSPACE.",
                 input_schema={"type": "object", "properties": {"skill_name": {"type": "string"}, "script_path": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "timeout_seconds": {"type": "number"}}, "required": ["skill_name", "script_path", "args"]}), run_skill_script)
             run_tools = ToolExecutor(catalog, self.policy, settings.tool_max_concurrency)
         tool_calls_used = 0
@@ -184,6 +196,9 @@ class RunExecutor:
                 active = self.policy.filter(run_tools.catalog)
                 try:
                     stage = "context_build"
+                    await self.emit(run_id, "run.progress", {
+                        "round": turn_number, "phase": "context", "message": "正在构建上下文",
+                    })
                     async def persist_summary(summary):
                         await self.store.append_summary(run.session_id, summary)
                         if summary.usage:
@@ -191,7 +206,7 @@ class RunExecutor:
                             await self.emit(run_id, "usage.updated", {"kind": "summary", **summary.usage.model_dump(exclude_none=True)})
 
                     async def compaction_event(event_type: str, payload: dict) -> None:
-                        await self.emit(run_id, event_type, payload)
+                        await self.emit(run_id, event_type, {"round": turn_number, **payload})
 
                     provider_request, report = await run_context.build(
                         task_id=run.task_id, run_id=run_id, turn_id=turn_id, model=request.model,
@@ -208,7 +223,10 @@ class RunExecutor:
                           active_tool_count=len(report.active_tool_names), omitted_entry_count=sum(len(ids) for ids in report.omitted_entry_ids_by_reason.values()))
                 await self.emit(run_id, "context.built", {"turn_id": turn_id, "status": "ready", "input_tokens_before_est": report.input_tokens_before_est, "input_tokens_after_est": report.input_tokens_after_est, "available_input_tokens": report.available_input_tokens, "output_reserve": report.output_reserve, "context_window": report.context_window, "active_tool_names": report.active_tool_names, "omitted_entry_count": sum(len(ids) for ids in report.omitted_entry_ids_by_reason.values()), "tool_result_reduction_count": len(report.tool_result_reductions), "summary_refs": [item.summary_id for item in report.summary_refs]})
                 stage = "provider_stream"
-                text, calls, usage = await self._collect_response(run_id, provider_request)
+                await self.emit(run_id, "run.progress", {
+                    "round": turn_number, "phase": "model", "message": "正在等待模型响应",
+                })
+                text, calls, usage = await self._collect_response(run_id, provider_request, turn_number)
                 run.usages.append(usage)
                 self._log(run, "llm.completed", turn_id=turn_id, ttft_ms=usage.ttft_ms,
                           elapsed_ms=usage.elapsed_ms, finish_reason=usage.finish_reason,
@@ -221,7 +239,14 @@ class RunExecutor:
                         return
                     await self.store.append_entry(run.session_id, SessionEntry(role="assistant", content=text, tool_calls=calls))
                     stage = "tool_execution"
-                    results = await run_tools.execute_batch(calls, lambda typ, payload: self.emit(run_id, typ, payload))
+                    await self.emit(run_id, "run.progress", {
+                        "round": turn_number, "phase": "tools",
+                        "message": f"正在执行 {len(calls)} 个工具调用",
+                    })
+                    results = await run_tools.execute_batch(
+                        calls,
+                        lambda typ, payload: self.emit(run_id, typ, {"round": turn_number, **payload}),
+                    )
                     for call, result in zip(calls, results, strict=True):
                         await self.store.append_entry(run.session_id, SessionEntry(
                             role="tool", content=result.model_dump_json(), tool_call_id=call.id, tool_name=call.name))
@@ -236,7 +261,7 @@ class RunExecutor:
         except Exception as exc:
             await self._fail(run_id, "provider_error", stage=stage, turn_id=turn_id, exception=exc)
 
-    async def _collect_response(self, run_id: str, provider_request) -> tuple[str, list[ToolCall], Usage]:
+    async def _collect_response(self, run_id: str, provider_request, turn_number: int) -> tuple[str, list[ToolCall], Usage]:
         fragments: list[str] = []
         calls: list[ToolCall] = []
         usage = Usage()
@@ -249,8 +274,11 @@ class RunExecutor:
             if delta.text:
                 if first_token_at is None:
                     first_token_at = time.monotonic()
+                    await self.emit(run_id, "run.progress", {
+                        "round": turn_number, "phase": "answer", "message": "正在生成回答",
+                    })
                 fragments.append(delta.text)
-                await self.emit(run_id, "assistant.delta", {"delta": delta.text})
+                await self.emit(run_id, "assistant.delta", {"delta": delta.text, "round": turn_number})
             calls.extend(delta.tool_calls)
             if delta.usage:
                 usage = delta.usage
