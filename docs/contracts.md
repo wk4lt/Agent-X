@@ -17,7 +17,8 @@ operations, `/api/tasks`, `/api/tasks/{task_id}`, task SSE, cancel and resume. B
 accepts `conversation_id` and an optional `Idempotency-Key`; it validates the conversation ownership
 before creating a Harness Run. A task/run/SSE/workspace lookup likewise begins with an ownership-scoped
 ConversationRun lookup and returns 404 for either missing or unauthorized identifiers.
-The Backend owns Tasks; Harness owns Sessions, Runs, events, tool calls, reports and usage.
+The Backend owns Tasks; Harness owns Sessions, Runs, events, tool calls, reports and usage. Follow-up
+Tasks in the same Conversation reuse its latest Harness `session_id`; a new Conversation starts a new Session.
 `resume` is an explicit user retry which creates a fresh Run and Session; it never silently
 replays an uncertain tool side effect in the old Run.
 
@@ -26,6 +27,8 @@ available input budget, omission counts, tool-result reduction counts and summar
 `usage.updated` has a `kind` of `run` or `summary`; provider token values are actual values, while
 the context event values are explicitly estimates. `context.compaction.started`,
 `context.compaction.completed` and `context.compaction.failed` are replayable Run events.
+`run.progress` is an operational, user-visible event containing `round`, `phase`, and a short Chinese
+status message. It reports context/model/tool/answer stages and never exposes hidden model reasoning.
 
 Conversation messages are stored in increasing `sequence` order. They preserve assistant `tool_calls`
 and tool `tool_call_id`/`tool_name` fields rather than flattening tools into display text. The backend
@@ -35,6 +38,8 @@ over SSE; repeated reconnects are de-duplicated by Harness entry ID.
 Skills are discovered at Run start from OpenCode-compatible directories. `list_skills` publishes
 only names/descriptions; `load_skill` is separate and never executes resources. `run_skill_script`
 accepts only `{skill_name, script_path, args, timeout_seconds}` and is subject to its own policy.
+The current Conversation workspace path is injected as trusted context. Skill scripts use it as their
+working directory and receive it in `AGENT_X_WORKSPACE`; Skill roots remain instruction/resource locations.
 Skill event types include `skill.discovered`, `skill.loaded`, `skill.invalid`,
 `skill.script.approval_required`, `skill.script.started`, `skill.script.completed`, and
 `skill.script.failed`; none include Skill bodies, environment values, or unbounded output.

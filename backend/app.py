@@ -198,11 +198,14 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
                 await app.state.history.get_conversation(principal(request), conversation_id)
             except HistoryNotFound as exc:
                 raise missing() from exc
+        # A Conversation owns one Harness Session. Reusing it is what makes a
+        # follow-up Run see the structured history produced by earlier Runs.
+        previous = await app.state.history.latest_mapping(principal(request), conversation_id)
         task_id = new_id("task")
         try:
             run = await app.state.client.create_run(CreateRunRequest(task_id=task_id,
                 idempotency_key=f"task-create:{task_id}", input=payload.input, selected_skills=payload.selected_skills,
-                workspace_id=conversation_id))
+                session_id=previous.session_id if previous else None, workspace_id=conversation_id))
             await app.state.history.create_run_mapping(principal_id=principal(request), conversation_id=conversation_id,
                 task_id=task_id, run_id=run.run_id, session_id=run.session_id, project_id=payload.project_id,
                 user_input=payload.input, request_key=idempotency_key)

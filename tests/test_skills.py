@@ -47,3 +47,26 @@ async def test_script_runner_enforces_containment_argv_output_and_policy(tmp_pat
     asking = SkillScriptRunner(workspace_root=tmp_path, python=sys.executable, policy="ask", allowed_extensions=(".py",),
                                default_timeout=2, max_timeout=2, max_output_bytes=20, max_concurrent=1)
     assert (await asking.run(record, "scripts/echo.py", [], None)).error_code == "skill_script_approval_required"
+
+
+@pytest.mark.asyncio
+async def test_script_runner_exposes_the_current_user_workspace(tmp_path):
+    project = tmp_path / "project"
+    workspace = tmp_path / "workspaces" / "conversation_1"
+    workspace.mkdir(parents=True)
+    skill = write_skill(project)
+    scripts = skill / "scripts"
+    scripts.mkdir()
+    (scripts / "workspace.py").write_text(
+        "import os\nprint(os.getcwd())\nprint(os.environ['AGENT_X_WORKSPACE'])\n",
+        encoding="utf-8",
+    )
+    record = discover_skills(project).records["demo-skill"]
+    runner = SkillScriptRunner(workspace_root=workspace, python=sys.executable, policy="allow",
+                               allowed_extensions=(".py",), default_timeout=2, max_timeout=2,
+                               max_output_bytes=1000, max_concurrent=1)
+
+    result = await runner.run(record, "scripts/workspace.py", [], None)
+
+    assert result.ok
+    assert result.content.splitlines() == [str(workspace.resolve()), str(workspace.resolve())]

@@ -113,7 +113,9 @@ python -m pytest
 每个会话都有独立本地工作区：`.data/workspaces/<conversation_id>/`；同一会话内的多个 Task/Run
 复用该工作区。UI 默认支持上传、列出和下载最大 25 MiB 的文件；可在 `.env` 配置
 `WORKSPACE_ROOT` 与 `WORKSPACE_MAX_FILE_BYTES`。
-工作区文件不会自动进入模型上下文。
+每个 Run 会把该工作区的绝对路径作为可信运行时元数据注入模型上下文；Agent 与 Skill 必须把它
+作为所有用户文件读写和生成产物的基准目录。Skill 脚本也会以此目录为 `cwd`，并通过
+`AGENT_X_WORKSPACE` 获得同一路径。工作区文件内容不会自动进入模型上下文，仍由 Agent 按需读取。
 
 运行诊断分别以 JSONL 写入 `LOG_ROOT/<session_id>/`，服务标准输出写入
 `LOG_ROOT/services/`；两个目录均可配置。
@@ -134,6 +136,9 @@ ANON_COOKIE_SECURE=false # HTTPS 部署时设为 true
 Alembic 升级。迁移版本位于 `backend/migrations/`，也可以手动执行
 `python -m backend.migrate`。SQLite 适用于单个 Backend 实例；多实例或高并发写入时，应保留
 同一 Repository/API 契约并切换至 PostgreSQL。
+
+同一 Conversation 的后续 Task 会复用同一个 Harness Session，因此追问会继续携带此前的用户消息、
+回答和结构化工具调用历史；新建 Conversation 才会创建新的 Session。
 
 ## Python 脚本调用
 
@@ -184,7 +189,8 @@ Skill 的目录名必须与 frontmatter 中的 `name` 一致。模型在调用 `
 
 `run_skill_script` 是独立的、仅接收 argv 的工具。它只接受已发现的 Skill 名与该 Skill 根目录下的
 相对文件路径，默认只允许 `.py` 和 `.sh`，使用受限环境并施加超时、输出与并发限制。项目 Skill
-脚本默认遵循 `SKILL_SCRIPT_POLICY=ask`；审阅脚本后才能在可信部署中显式改为 `trusted` 或 `allow`。
+脚本在当前会话工作区执行，并收到 `AGENT_X_WORKSPACE` 环境变量；默认遵循
+`SKILL_SCRIPT_POLICY=ask`，审阅脚本后才能在可信部署中显式改为 `trusted` 或 `allow`。
 
 ## MCP 工具接入
 
