@@ -206,6 +206,9 @@ class RunView(BaseModel):
     session_id: str
     status: RunStatus
     stop_reason: str | None = None
+    failure_stage: str | None = None
+    failure_code: str | None = None
+    failure_message: str | None = None
     final_answer: str | None = None
     created_at: datetime
     updated_at: datetime
