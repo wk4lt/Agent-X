@@ -50,9 +50,7 @@ class RunExecutor:
             if settings.skill_load_policy == "deny":
                 await self._complete(run_id, "当前 Skill 功能已禁用，暂时无法处理问题。", "skill_load_denied")
                 return
-            snapshot = discover_skills(settings.skill_project_root, settings.skill_global_config_root,
-                project_roots=("skills",),
-                global_roots=())
+            snapshot = discover_skills(settings.skill_project_root)
             selected = set(request.selected_skills)
             if selected - snapshot.records.keys():
                 await self._complete(run_id, "所选 Skill 不可用，请重新选择后提交问题。", "skill_selection_invalid")
