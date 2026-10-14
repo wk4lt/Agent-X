@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import re
 import sys
 import time
+import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,6 +23,9 @@ from harness.store import InMemorySessionStore
 from harness.tools import ToolCatalog, ToolExecutor, ToolPolicy
 
 
+LOG = logging.getLogger("agent_x.harness")
+
+
 @dataclass
 class RunExecutor:
     store: InMemorySessionStore
@@ -33,6 +39,16 @@ class RunExecutor:
     mcp_registry: McpToolRegistry | None = None
 
     async def execute(self, run_id: str, request: CreateRunRequest) -> None:
+        try:
+            await self._execute(run_id, request)
+        except asyncio.CancelledError:
+            if (await self.store.get_run(run_id)).status is not RunStatus.cancelled:
+                await self._cancel(run_id)
+            raise
+        except Exception as exc:
+            await self._fail(run_id, "runtime_error", stage="initialization", exception=exc)
+
+    async def _execute(self, run_id: str, request: CreateRunRequest) -> None:
         run = await self.store.get_run(run_id)
         started = time.monotonic()
         self._ensure_workspace(run)
@@ -154,6 +170,8 @@ class RunExecutor:
                 input_schema={"type": "object", "properties": {"skill_name": {"type": "string"}, "script_path": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "timeout_seconds": {"type": "number"}}, "required": ["skill_name", "script_path", "args"]}), run_skill_script)
             run_tools = ToolExecutor(catalog, self.policy, settings.tool_max_concurrency)
         tool_calls_used = 0
+        stage = "run_execution"
+        turn_id: str | None = None
         try:
             for turn_number in range(1, request.budget.max_turns + 1):
                 if run.cancelled:
@@ -165,6 +183,7 @@ class RunExecutor:
                 turn_id = new_id("turn")
                 active = self.policy.filter(run_tools.catalog)
                 try:
+                    stage = "context_build"
                     async def persist_summary(summary):
                         await self.store.append_summary(run.session_id, summary)
                         if summary.usage:
@@ -188,6 +207,7 @@ class RunExecutor:
                 self._log(run, "context.built", turn_id=turn_id, input_tokens_est=report.input_tokens_est,
                           active_tool_count=len(report.active_tool_names), omitted_entry_count=sum(len(ids) for ids in report.omitted_entry_ids_by_reason.values()))
                 await self.emit(run_id, "context.built", {"turn_id": turn_id, "status": "ready", "input_tokens_before_est": report.input_tokens_before_est, "input_tokens_after_est": report.input_tokens_after_est, "available_input_tokens": report.available_input_tokens, "output_reserve": report.output_reserve, "context_window": report.context_window, "active_tool_names": report.active_tool_names, "omitted_entry_count": sum(len(ids) for ids in report.omitted_entry_ids_by_reason.values()), "tool_result_reduction_count": len(report.tool_result_reductions), "summary_refs": [item.summary_id for item in report.summary_refs]})
+                stage = "provider_stream"
                 text, calls, usage = await self._collect_response(run_id, provider_request)
                 run.usages.append(usage)
                 self._log(run, "llm.completed", turn_id=turn_id, ttft_ms=usage.ttft_ms,
@@ -200,19 +220,21 @@ class RunExecutor:
                         await self._fail(run_id, "budget_exceeded")
                         return
                     await self.store.append_entry(run.session_id, SessionEntry(role="assistant", content=text, tool_calls=calls))
+                    stage = "tool_execution"
                     results = await run_tools.execute_batch(calls, lambda typ, payload: self.emit(run_id, typ, payload))
                     for call, result in zip(calls, results, strict=True):
                         await self.store.append_entry(run.session_id, SessionEntry(
                             role="tool", content=result.model_dump_json(), tool_call_id=call.id, tool_name=call.name))
                     continue
+                stage = "completion"
                 await self._complete(run_id, text)
                 return
             await self._fail(run_id, "max_turns")
         except asyncio.CancelledError:
             await self._cancel(run_id)
             raise
-        except Exception:
-            await self._fail(run_id, "provider_error")
+        except Exception as exc:
+            await self._fail(run_id, "provider_error", stage=stage, turn_id=turn_id, exception=exc)
 
     async def _collect_response(self, run_id: str, provider_request) -> tuple[str, list[ToolCall], Usage]:
         fragments: list[str] = []
@@ -256,10 +278,24 @@ class RunExecutor:
         self._log(await self.store.get_run(run_id), "run.cancelled", run_id=run_id, stop_reason="user_cancelled")
         await self.emit(run_id, "run.cancelled", {"stop_reason": "user_cancelled"})
 
-    async def _fail(self, run_id: str, reason: str) -> None:
-        await self.store.update_run(run_id, status=RunStatus.failed, stop_reason=reason)
-        self._log(await self.store.get_run(run_id), "run.failed", run_id=run_id, stop_reason=reason)
-        await self.emit(run_id, "run.failed", {"stop_reason": reason})
+    async def _fail(self, run_id: str, reason: str, *, stage: str | None = None, turn_id: str | None = None,
+                    exception: Exception | None = None) -> None:
+        details = _exception_details(exception) if exception else {}
+        await self.store.update_run(
+            run_id, status=RunStatus.failed, stop_reason=reason, failure_stage=stage,
+            failure_code=details.get("error_code"), failure_message=details.get("error_message"),
+        )
+        run = await self.store.get_run(run_id)
+        self._log(run, "run.failed", run_id=run_id, stop_reason=reason, stage=stage, turn_id=turn_id, **details)
+        if exception:
+            LOG.error("run failed task_id=%s run_id=%s session_id=%s stop_reason=%s stage=%s turn_id=%s error_code=%s error_message=%s\n%s",
+                      run.task_id, run_id, run.session_id, reason, stage, turn_id,
+                      details["error_code"], details["error_message"], details["traceback"])
+        else:
+            LOG.warning("run failed task_id=%s run_id=%s session_id=%s stop_reason=%s stage=%s turn_id=%s",
+                        run.task_id, run_id, run.session_id, reason, stage, turn_id)
+        await self.emit(run_id, "run.failed", {"stop_reason": reason, "stage": stage, "turn_id": turn_id,
+                                                 **{key: value for key, value in details.items() if key != "traceback"}})
 
     def _log(self, run, event: str, **fields: object) -> None:
         if not self.log_root:
@@ -291,3 +327,20 @@ def _safe_script_hash(root: Path, value: str) -> str | None:
         return __import__("hashlib").sha256(resolved.read_bytes()).hexdigest()
     except OSError:
         return None
+
+
+def _exception_details(exc: Exception) -> dict[str, str]:
+    """Keep a useful local traceback while keeping known credential formats out of logs/events."""
+    message = _redact_diagnostic(str(exc), limit=1_200) or "unexpected runtime error"
+    formatted = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return {
+        "error_code": type(exc).__name__,
+        "error_message": message,
+        "traceback": _redact_diagnostic(formatted, limit=8_000),
+    }
+
+
+def _redact_diagnostic(value: str, *, limit: int) -> str:
+    cleaned = re.sub(r"(?i)\\b(api[_-]?key|authorization|token|password|secret)\\b(\\s*[=:]\\s*)([^\\s,;]+)",
+                     r"\\1\\2[REDACTED]", value)
+    return cleaned[:limit]
