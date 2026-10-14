@@ -165,9 +165,9 @@ with AgentXClient("http://127.0.0.1:8000", api_key="你的 API Key") as client:
 
 ## Skills
 
-Harness 在每次 Run 开始时，从项目目录下的 `.opencode/skills`、`.claude/skills`、`.agents/skills`
-以及对应的全局目录发现 OpenCode 兼容的 `SKILL.md`；项目级 Skill 优先。模型在调用
-`load_skill` 前只能看到名称和描述，加载说明不会执行脚本。
+Harness 在每次 Run 开始时，只从项目根目录的 `skills/<skill-name>/SKILL.md` 发现 Skill。
+Skill 的目录名必须与 frontmatter 中的 `name` 一致。模型在调用 `load_skill` 前只能看到名称和描述，
+加载说明不会执行脚本。
 
 每次请求必须通过 `selected_skills` 指定 Skill；未选择、选择失效或 Skill 被禁用时，
 直接返回提示，不调用模型或工具。系统提示词在每轮注入本次选择的名称和描述，要求模型
