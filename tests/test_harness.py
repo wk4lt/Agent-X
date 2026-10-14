@@ -96,7 +96,6 @@ def test_harness_app_with_runtime_settings_completes_run(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "workspaces"))
     monkeypatch.setenv("LOG_ROOT", str(tmp_path / "logs"))
     monkeypatch.setenv("SKILL_PROJECT_ROOT", str(tmp_path))
-    monkeypatch.setenv("SKILL_GLOBAL_CONFIG_ROOT", str(tmp_path / "config"))
     skill = tmp_path / "skills/demo"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: demo\ndescription: Demo software tasks.\n---\n# Instructions\n")
