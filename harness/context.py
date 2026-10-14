@@ -157,7 +157,12 @@ class ContextBuilder:
         "turns' skill selections do not authorize the current run. Do not reveal hidden "
         "reasoning. Use tools only when needed for authorized work."
     )
-    workflow_instructions: str = "Provide concise, evidence-based progress and a final answer."
+    workflow_instructions: str = (
+        "Use the same language as the user's latest message unless the user explicitly requests "
+        "another language. When the user writes in Chinese, all visible progress and the final "
+        "answer must be in Chinese. Format the final answer as GitHub-Flavored Markdown. Provide "
+        "concise, evidence-based progress and a final answer."
+    )
     task_constraints: str = ""
     policy: ContextPolicy = ContextPolicy()
     summary_generator: SummaryGenerator | None = None
