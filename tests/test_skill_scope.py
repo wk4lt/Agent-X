@@ -15,7 +15,7 @@ from harness.tools import ToolCatalog, ToolExecutor, ToolPolicy
 
 def make_executor(tmp_path, provider, *, denied=False):
     for name, description in (("code-doc", "Search code documentation."), ("log-analysis", "Analyze failure logs.")):
-        skill = tmp_path / ".opencode/skills" / name
+        skill = tmp_path / "skills" / name
         skill.mkdir(parents=True, exist_ok=True)
         (skill / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n# {name} instructions\n")
     settings = replace(HarnessSettings.from_environment(), skill_project_root=tmp_path,
