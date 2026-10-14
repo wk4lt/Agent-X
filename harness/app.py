@@ -111,8 +111,8 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
     @app.get("/internal/skills", dependencies=[Depends(authenticate)])
     async def list_skills():
         snapshot = discover_skills(settings.skill_project_root, settings.skill_global_config_root,
-            project_roots=(".opencode/skills", ".claude/skills", ".agents/skills"),
-            global_roots=("opencode/skills", "../.claude/skills", "../.agents/skills"))
+            project_roots=("skills",),
+            global_roots=())
         if settings.skill_load_policy == "deny":
             return []
         return [summary.model_dump() for summary in snapshot.summaries()]
@@ -122,8 +122,8 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
         if settings.skill_load_policy == "deny":
             raise HTTPException(403, "skill_load_denied")
         snapshot = discover_skills(settings.skill_project_root, settings.skill_global_config_root,
-            project_roots=(".opencode/skills", ".claude/skills", ".agents/skills"),
-            global_roots=("opencode/skills", "../.claude/skills", "../.agents/skills"))
+            project_roots=("skills",),
+            global_roots=())
         try:
             detail = snapshot.load(name)
         except KeyError as exc:
