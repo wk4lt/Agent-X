@@ -36,6 +36,13 @@ def test_settings_exposes_provider_retry_policy(monkeypatch):
     assert settings.llm_retry_max_delay_seconds == 2
 
 
+def test_openai_compatible_provider_accepts_internal_http_base_url(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_BASE_URL", "http://10.29.93.96:3000/v1")
+    assert HarnessSettings.from_environment().llm_base_url == "http://10.29.93.96:3000/v1"
+
+
 def test_internal_run_payload_does_not_override_harness_defaults():
     request = CreateRunRequest(task_id="task_1", idempotency_key="request_1", input="hello")
     payload = request.model_dump(mode="json", exclude_unset=True)
