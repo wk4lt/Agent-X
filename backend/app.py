@@ -98,19 +98,19 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
             pass
 
     def workspace_file(mapping, filename: str) -> Path:
-        name = Path(filename).name
-        if not name or name in {".", ".."}:
+        requested = Path(filename)
+        if not filename or requested.is_absolute():
             raise HTTPException(422, "invalid_filename")
-        directory = workspace(mapping)
-        destination = (directory / name).resolve()
-        if destination.parent != directory:
+        directory = workspace(mapping).resolve()
+        destination = (directory / requested).resolve()
+        if not destination.is_relative_to(directory):
             raise HTTPException(422, "invalid_filename")
         return destination
 
-    def file_view(path: Path) -> WorkspaceFile:
+    def file_view(path: Path, directory: Path) -> WorkspaceFile:
         from datetime import datetime, timezone
         details = path.stat()
-        return WorkspaceFile(name=path.name, size_bytes=details.st_size,
+        return WorkspaceFile(name=path.name, path=path.relative_to(directory).as_posix(), size_bytes=details.st_size,
                              modified_at=datetime.fromtimestamp(details.st_mtime, timezone.utc))
 
     def task_view(mapping, run=None) -> TaskView:
@@ -290,8 +290,14 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
 
     @app.get("/api/tasks/{task_id}/workspace/files")
     async def list_workspace_files(request: Request, task_id: str) -> list[WorkspaceFile]:
-        directory = workspace(await task_mapping(request, task_id))
-        return [file_view(path) for path in sorted(directory.iterdir(), key=lambda item: item.name.lower()) if path.is_file()]
+        directory = workspace(await task_mapping(request, task_id)).resolve()
+        files = []
+        for dirpath, _dirnames, filenames in os.walk(directory):
+            for filename in filenames:
+                path = Path(dirpath) / filename
+                if path.is_file():
+                    files.append(file_view(path, directory))
+        return sorted(files, key=lambda file: file.path.lower())
 
     @app.post("/api/tasks/{task_id}/workspace/files", status_code=201)
     async def upload_workspace_file(request: Request, task_id: str, file: UploadFile = File(...)) -> WorkspaceFile:
@@ -312,11 +318,11 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
             raise
         finally:
             await file.close()
-        uploaded = file_view(destination)
+        uploaded = file_view(destination, workspace(mapping).resolve())
         audit(mapping, "workspace.file_uploaded", name=uploaded.name, size_bytes=uploaded.size_bytes)
         return uploaded
 
-    @app.get("/api/tasks/{task_id}/workspace/files/{filename}")
+    @app.get("/api/tasks/{task_id}/workspace/files/{filename:path}")
     async def download_workspace_file(request: Request, task_id: str, filename: str) -> FileResponse:
         mapping = await task_mapping(request, task_id)
         path = workspace_file(mapping, filename)

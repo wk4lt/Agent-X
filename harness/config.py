@@ -110,8 +110,8 @@ class HarnessSettings:
             raise ConfigurationError("LLM_API_KEY or DEEPSEEK_API_KEY is required for openai_compatible")
         base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").rstrip("/")
         parsed = urlparse(base_url)
-        if provider == "openai_compatible" and (parsed.scheme != "https" or not parsed.netloc):
-            raise ConfigurationError("LLM_BASE_URL must be an https URL")
+        if provider == "openai_compatible" and (parsed.scheme not in {"http", "https"} or not parsed.netloc):
+            raise ConfigurationError("LLM_BASE_URL must be an http(s) URL with a host")
         retry_base_delay = _seconds("LLM_RETRY_BASE_DELAY_SECONDS", 0.5, minimum=0, maximum=60)
         retry_max_delay = _seconds("LLM_RETRY_MAX_DELAY_SECONDS", 4, minimum=0, maximum=300)
         if retry_max_delay < retry_base_delay:

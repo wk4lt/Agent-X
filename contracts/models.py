@@ -274,5 +274,6 @@ class ConversationMessagePage(BaseModel):
 
 class WorkspaceFile(BaseModel):
     name: str
+    path: str
     size_bytes: int
     modified_at: datetime
