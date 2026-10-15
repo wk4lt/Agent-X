@@ -10,6 +10,7 @@ from contracts.models import (
     EventEnvelope,
     RunStatus,
     RunView,
+    SessionContextAsset,
     SessionEntry,
     ToolCallStatus,
     Usage,
@@ -55,9 +56,11 @@ class InMemorySessionStore:
         self._runs: dict[str, RunRecord] = {}
         self._sessions: dict[str, list[SessionEntry]] = {}
         self._summaries: dict[str, list[DerivedSummary]] = {}
+        self._context_assets: dict[str, dict[tuple[str, str], SessionContextAsset]] = {}
         self._idempotency: dict[str, str] = {}
         self._events: dict[str, list[EventEnvelope]] = {}
         self._changed: dict[str, asyncio.Condition] = {}
+        self._session_execution_locks: dict[str, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
 
     async def create_run(self, task_id: str, idempotency_key: str, session_id: str | None,
@@ -71,10 +74,16 @@ class InMemorySessionStore:
             self._runs[run_id] = record
             self._sessions.setdefault(record.session_id, [])
             self._summaries.setdefault(record.session_id, [])
+            self._context_assets.setdefault(record.session_id, {})
             self._events[run_id] = []
             self._changed[run_id] = asyncio.Condition()
+            self._session_execution_locks.setdefault(record.session_id, asyncio.Lock())
             self._idempotency[idempotency_key] = run_id
             return record, True
+
+    def session_execution_lock(self, session_id: str) -> asyncio.Lock:
+        """Serialize Runs that append to and build from the same Session."""
+        return self._session_execution_locks.setdefault(session_id, asyncio.Lock())
 
     async def get_run(self, run_id: str) -> RunRecord:
         try:
@@ -93,6 +102,19 @@ class InMemorySessionStore:
 
     async def session_summaries(self, session_id: str) -> list[DerivedSummary]:
         return list(self._summaries.get(session_id, []))
+
+    async def put_context_asset(self, session_id: str, asset: SessionContextAsset) -> None:
+        async with self._lock:
+            assets = self._context_assets.setdefault(session_id, {})
+            # One active version per logical asset. Replacing a changed Skill prevents
+            # stale instructions from being injected alongside the selected version.
+            for key in [key for key in assets if key[0] == asset.kind and key[1] == asset.name]:
+                del assets[key]
+            assets[(asset.kind, asset.name)] = asset
+
+    async def session_context_assets(self, session_id: str) -> list[SessionContextAsset]:
+        assets = self._context_assets.get(session_id, {})
+        return [assets[key] for key in sorted(assets)]
 
     async def update_run(self, run_id: str, *, status: RunStatus | None = None,
                          stop_reason: str | None = None, failure_stage: str | None = None,

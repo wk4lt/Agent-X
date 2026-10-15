@@ -67,6 +67,49 @@ async def test_streamed_tool_call_allows_null_delta_fields(monkeypatch):
     assert deltas[0].tool_calls[0].id == "call_1"
     assert deltas[0].tool_calls[0].name == "lookup"
     assert deltas[0].tool_calls[0].arguments == {"query": "Agent-X"}
+    assert deltas[0].tool_calls[0].arguments_json == '{"query":"Agent-X"}'
+
+    replay = OpenAICompatibleProvider._wire_messages([{
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [deltas[0].tool_calls[0].model_dump()],
+    }])
+    assert replay[0]["tool_calls"][0]["function"]["arguments"] == '{"query":"Agent-X"}'
+
+
+@pytest.mark.asyncio
+async def test_reads_deepseek_cache_usage_fields(monkeypatch):
+    chunk = {
+        "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 2,
+            "prompt_cache_hit_tokens": 80,
+            "prompt_cache_miss_tokens": 20,
+        },
+    }
+    body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+
+    async def handler(request):
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("harness.provider.httpx.AsyncClient", client_factory)
+    provider = OpenAICompatibleProvider("https://provider.example/v1", "test-key")
+    deltas = [delta async for delta in provider.stream(
+        ProviderRequest(model="test-model", messages=[], tools=[])
+    )]
+
+    usage = deltas[-1].usage
+    assert usage is not None
+    assert usage.cached_tokens_actual == 80
+    assert usage.cache_miss_tokens_actual == 20
 
 
 @pytest.mark.asyncio

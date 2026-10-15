@@ -73,6 +73,32 @@ class _RetryRequest(Exception):
         self.retry_after = retry_after
 
 
+def wire_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Translate internal ToolCall dictionaries while preserving raw arguments."""
+    wire = dict(message)
+    calls = wire.get("tool_calls")
+    if not calls:
+        return wire
+    translated = []
+    for call in calls:
+        if "function" in call:
+            translated.append(dict(call))
+            continue
+        arguments_json = call.get("arguments_json")
+        if not isinstance(arguments_json, str):
+            arguments_json = json.dumps(
+                call.get("arguments") or {}, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":"),
+            )
+        translated.append({
+            "id": call["id"],
+            "type": "function",
+            "function": {"name": call["name"], "arguments": arguments_json},
+        })
+    wire["tool_calls"] = translated
+    return wire
+
+
 class OpenAICompatibleProvider:
     """OpenAI chat-completions streaming adapter, isolated from the runtime loop."""
     def __init__(self, base_url: str, api_key: str, timeout_seconds: float = 90, *, max_attempts: int = 3,
@@ -123,7 +149,12 @@ class OpenAICompatibleProvider:
                                 usage.prompt_tokens_actual = raw_usage.get("prompt_tokens")
                                 usage.completion_tokens_actual = raw_usage.get("completion_tokens")
                                 details = raw_usage.get("prompt_tokens_details") or {}
-                                usage.cached_tokens_actual = details.get("cached_tokens")
+                                usage.cached_tokens_actual = (
+                                    raw_usage.get("prompt_cache_hit_tokens")
+                                    if raw_usage.get("prompt_cache_hit_tokens") is not None
+                                    else details.get("cached_tokens")
+                                )
+                                usage.cache_miss_tokens_actual = raw_usage.get("prompt_cache_miss_tokens")
                             for choice in chunk.get("choices", []):
                                 delta = choice.get("delta") or {}
                                 content = delta.get("content") or ""
@@ -152,11 +183,15 @@ class OpenAICompatibleProvider:
                 calls: list[ToolCall] = []
                 for index in sorted(partial_calls):
                     call = partial_calls[index]
+                    arguments_json = call["arguments"] or "{}"
                     try:
-                        arguments = json.loads(call["arguments"] or "{}")
+                        arguments = json.loads(arguments_json)
                     except json.JSONDecodeError as exc:
                         raise ProviderError("provider_incomplete_tool_arguments") from exc
-                    calls.append(ToolCall(id=call["id"] or f"provider_call_{index}", name=call["name"], arguments=arguments))
+                    calls.append(ToolCall(
+                        id=call["id"] or f"provider_call_{index}", name=call["name"],
+                        arguments=arguments, arguments_json=arguments_json,
+                    ))
                 usage.finish_reason = finish_reason
                 yield ProviderDelta(tool_calls=calls, usage=usage, finish_reason=finish_reason)
                 return
@@ -193,19 +228,7 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _wire_messages(messages: list[dict]) -> list[dict]:
-        """Translate internal ToolCall objects only at the provider boundary."""
-        result: list[dict] = []
-        for message in messages:
-            wire = dict(message)
-            calls = wire.get("tool_calls")
-            if calls:
-                wire["tool_calls"] = [
-                    {"id": call["id"], "type": "function", "function": {
-                        "name": call["name"], "arguments": json.dumps(call["arguments"], ensure_ascii=False),
-                    }} for call in calls
-                ]
-            result.append(wire)
-        return result
+        return [wire_message(message) for message in messages]
 
 
 def provider_from_settings(settings) -> ProviderAdapter:

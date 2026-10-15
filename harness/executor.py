@@ -12,7 +12,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from contracts.models import (
-    CreateRunRequest, RunStatus, SessionEntry, ToolCall, ToolResult, ToolSpec, Usage, new_id,
+    CreateRunRequest, RunStatus, SessionContextAsset, SessionEntry, ToolCall, ToolResult,
+    ToolSpec, Usage, new_id,
 )
 from contracts.session_storage import append_session_log, session_directory
 from harness.context import ContextBudgetExceeded, ContextBuilder
@@ -40,7 +41,9 @@ class RunExecutor:
 
     async def execute(self, run_id: str, request: CreateRunRequest) -> None:
         try:
-            await self._execute(run_id, request)
+            run = await self.store.get_run(run_id)
+            async with self.store.session_execution_lock(run.session_id):
+                await self._execute(run_id, request)
         except asyncio.CancelledError:
             if (await self.store.get_run(run_id)).status is not RunStatus.cancelled:
                 await self._cancel(run_id)
@@ -71,6 +74,7 @@ class RunExecutor:
                 run_context,
                 task_constraints="\n".join(filter(None, [run_context.task_constraints, workspace_instructions])),
             )
+        base_task_constraints = run_context.task_constraints
         if settings is not None:
             if not request.selected_skills:
                 await self._complete(run_id, "请先选择与问题相关的 Skill，再提交问题。", "skill_selection_required")
@@ -84,6 +88,25 @@ class RunExecutor:
                 await self._complete(run_id, "所选 Skill 不可用，请重新选择后提交问题。", "skill_selection_invalid")
                 return
             snapshot.records = {name: record for name, record in snapshot.records.items() if name in selected}
+            selected_assets = {
+                asset.name: asset
+                for asset in await self.store.session_context_assets(run.session_id)
+                if asset.kind == "skill" and asset.name in selected
+                and asset.content_hash == snapshot.records[asset.name].content_hash
+            }
+
+            def refresh_skill_context() -> None:
+                nonlocal run_context
+                rendered = [
+                    f"Selected skill instructions (name={name}, sha256={asset.content_hash}):\n{asset.content}"
+                    for name, asset in sorted(selected_assets.items())
+                ]
+                run_context = replace(
+                    run_context,
+                    task_constraints="\n\n".join(filter(None, [base_task_constraints, *rendered])),
+                )
+
+            refresh_skill_context()
             scope = json.dumps([{"name": item.name, "description": item.description}
                                 for item in snapshot.summaries()], ensure_ascii=False)
             # Keep scope local to this Run: the builder is shared by concurrent executions.
@@ -129,7 +152,7 @@ class RunExecutor:
                         "tool_names": [tool.spec.name for tool in mounted],
                         "tool_count": len(mounted),
                     })
-            loaded_hashes: set[str] = set()
+            loaded_hashes = {asset.content_hash for asset in selected_assets.values()}
             runner = SkillScriptRunner(workspace_root=run_workspace or settings.skill_project_root, python=os.getenv("PYTHON_EXECUTABLE", sys.executable),
                 policy=settings.skill_script_policy, allowed_extensions=settings.skill_allowed_extensions,
                 default_timeout=settings.skill_default_timeout_seconds, max_timeout=settings.skill_max_timeout_seconds,
@@ -152,11 +175,20 @@ class RunExecutor:
                     await self.emit(run_id, "skill.load_denied", {"name": name, "error_code": "skill_not_found"})
                     return ToolResult(ok=False, content="Skill was not found.", error_code="skill_not_found")
                 if content.content_hash in loaded_hashes:
-                    return ToolResult(ok=True, content="Skill is already loaded for this Run.")
+                    return ToolResult(ok=True, content="Skill instructions are already loaded in session context.")
                 loaded_hashes.add(content.content_hash)
+                asset = SessionContextAsset(
+                    name=name, content_hash=content.content_hash, content=content.content,
+                )
+                await self.store.put_context_asset(run.session_id, asset)
+                selected_assets[name] = asset
+                refresh_skill_context()
                 await self.emit(run_id, "skill.loaded", {"name": name, "source": snapshot.records[name].summary.source,
                     "content_hash": content.content_hash})
-                return ToolResult(ok=True, content=content.content)
+                return ToolResult(
+                    ok=True,
+                    content=f"Skill {name!r} was loaded into stable session context (sha256={content.content_hash}).",
+                )
 
             async def run_skill_script(arguments: dict) -> ToolResult:
                 name, script = arguments.get("skill_name"), arguments.get("script_path")
@@ -182,6 +214,7 @@ class RunExecutor:
                 input_schema={"type": "object", "properties": {"skill_name": {"type": "string"}, "script_path": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "timeout_seconds": {"type": "number"}}, "required": ["skill_name", "script_path", "args"]}), run_skill_script)
             run_tools = ToolExecutor(catalog, self.policy, settings.tool_max_concurrency)
         tool_calls_used = 0
+        pending_calls: list[ToolCall] = []
         stage = "run_execution"
         turn_id: str | None = None
         try:
@@ -238,6 +271,7 @@ class RunExecutor:
                         await self._fail(run_id, "budget_exceeded")
                         return
                     await self.store.append_entry(run.session_id, SessionEntry(role="assistant", content=text, tool_calls=calls))
+                    pending_calls = list(calls)
                     stage = "tool_execution"
                     await self.emit(run_id, "run.progress", {
                         "round": turn_number, "phase": "tools",
@@ -250,16 +284,40 @@ class RunExecutor:
                     for call, result in zip(calls, results, strict=True):
                         await self.store.append_entry(run.session_id, SessionEntry(
                             role="tool", content=result.model_dump_json(), tool_call_id=call.id, tool_name=call.name))
+                    pending_calls = []
                     continue
                 stage = "completion"
                 await self._complete(run_id, text)
                 return
             await self._fail(run_id, "max_turns")
         except asyncio.CancelledError:
+            await self._repair_pending_tool_calls(run.session_id, pending_calls)
             await self._cancel(run_id)
             raise
         except Exception as exc:
+            await self._repair_pending_tool_calls(run.session_id, pending_calls)
             await self._fail(run_id, "provider_error", stage=stage, turn_id=turn_id, exception=exc)
+
+    async def _repair_pending_tool_calls(self, session_id: str, calls: list[ToolCall]) -> None:
+        if not calls:
+            return
+        completed = {
+            entry.tool_call_id
+            for entry in await self.store.session_entries(session_id)
+            if entry.role == "tool" and entry.tool_call_id
+        }
+        for call in calls:
+            if call.id in completed:
+                continue
+            result = ToolResult(
+                ok=False,
+                content="Tool execution was interrupted; its external outcome may be unknown.",
+                error_code="tool_interrupted",
+            )
+            await self.store.append_entry(session_id, SessionEntry(
+                role="tool", content=result.model_dump_json(),
+                tool_call_id=call.id, tool_name=call.name,
+            ))
 
     async def _collect_response(self, run_id: str, provider_request, turn_number: int) -> tuple[str, list[ToolCall], Usage]:
         fragments: list[str] = []

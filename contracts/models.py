@@ -65,6 +65,9 @@ class ToolCall(BaseModel):
     id: str = Field(default_factory=lambda: new_id("call"))
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    # Preserve the provider's exact streamed JSON so the next request can replay the
+    # assistant tool call byte-for-byte instead of changing its cached token prefix.
+    arguments_json: str | None = None
 
 
 class ToolResult(BaseModel):
@@ -84,6 +87,14 @@ class SessionEntry(BaseModel):
     tool_name: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class SessionContextAsset(BaseModel):
+    """Stable, versioned context material injected outside append-only chat history."""
+    kind: Literal["skill"] = "skill"
+    name: str
+    content_hash: str
+    content: str
 
 
 class ToolResultReduction(BaseModel):
@@ -163,6 +174,7 @@ class Usage(BaseModel):
     prompt_tokens_actual: int | None = None
     completion_tokens_actual: int | None = None
     cached_tokens_actual: int | None = None
+    cache_miss_tokens_actual: int | None = None
     ttft_ms: int | None = None
     elapsed_ms: int | None = None
     finish_reason: str | None = None

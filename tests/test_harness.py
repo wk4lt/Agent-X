@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 import pytest
@@ -64,6 +65,59 @@ async def test_cancelled_run_has_terminal_event():
         await task
     assert (await store.get_run(run.run_id)).status.value == "cancelled"
     assert (await store.events_after(run.run_id))[-1].type == "run.cancelled"
+    entries = await store.session_entries(run.session_id)
+    assert [entry.role for entry in entries] == ["user", "assistant", "tool"]
+    assert json.loads(entries[-1].content)["error_code"] == "tool_interrupted"
+
+
+@pytest.mark.asyncio
+async def test_runs_sharing_a_session_are_serialized_and_see_completed_history():
+    class SerialProbeProvider:
+        def __init__(self):
+            self.requests = []
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.active = 0
+            self.max_active = 0
+
+        async def stream(self, request):
+            index = len(self.requests)
+            self.requests.append(request)
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                if index == 0:
+                    self.started.set()
+                    await self.release.wait()
+                yield ProviderDelta(text=f"answer-{index + 1}")
+            finally:
+                self.active -= 1
+
+    provider = SerialProbeProvider()
+    store = InMemorySessionStore()
+    policy = ToolPolicy()
+    executor = RunExecutor(
+        store, provider, ContextBuilder(), ToolExecutor(ToolCatalog(), policy), policy,
+    )
+    first_request = CreateRunRequest(task_id="first", idempotency_key="first", input="question one")
+    first, _ = await store.create_run("first", "first", None)
+    second_request = CreateRunRequest(
+        task_id="second", idempotency_key="second", input="question two",
+        session_id=first.session_id,
+    )
+    second, _ = await store.create_run("second", "second", first.session_id)
+
+    first_task = asyncio.create_task(executor.execute(first.run_id, first_request))
+    await provider.started.wait()
+    second_task = asyncio.create_task(executor.execute(second.run_id, second_request))
+    await asyncio.sleep(.02)
+    assert len(provider.requests) == 1
+    provider.release.set()
+    await asyncio.gather(first_task, second_task)
+
+    assert provider.max_active == 1
+    second_contents = [message.get("content") for message in provider.requests[1].messages]
+    assert second_contents[-3:] == ["question one", "answer-1", "question two"]
 
 
 @pytest.mark.asyncio
