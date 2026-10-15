@@ -12,6 +12,15 @@ class FakeHarnessClient:
         return RunView(run_id=f"run_{request.task_id}", task_id=request.task_id, session_id=f"session_{request.task_id}",
                        status=RunStatus.accepted, created_at=now, updated_at=now)
 
+    async def get_run(self, run_id):
+        now = datetime.now(timezone.utc)
+        task_id = run_id.removeprefix("run_")
+        return RunView(run_id=run_id, task_id=task_id, session_id=f"session_{task_id}",
+                       status=RunStatus.completed, created_at=now, updated_at=now)
+
+    async def session_entries(self, run_id):
+        return []
+
 
 def test_workspace_files_are_task_scoped_and_downloadable(tmp_path):
     workspace_root, log_root = tmp_path / "workspaces", tmp_path / "logs"
@@ -57,5 +66,21 @@ def test_workspace_recursively_lists_and_downloads_skill_artifacts(tmp_path):
         download = client.get(f"/api/tasks/{task_id}/workspace/files/troubleshooter_out/task_xxx/analysis_raw.json")
         assert download.status_code == 200
         assert download.content == b'{"status":"ok"}'
-        assert client.get(f"/api/tasks/{task_id}/workspace/files/../../etc/passwd").status_code == 422
+
+
+def test_workspace_download_rejects_unsafe_paths_and_external_symlinks(tmp_path):
+    workspace_root, log_root = tmp_path / "workspaces", tmp_path / "logs"
+    app = create_app(client=FakeHarnessClient(), workspace_root=workspace_root, log_root=log_root)
+    with TestClient(app) as client:
+        task = client.post("/api/tasks", json={"input": "analyze"}).json()
+        task_id, workspace_id = task["task_id"], task["conversation_id"]
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        directory = workspace_root / workspace_id
+        directory.mkdir(parents=True)
+        (directory / "external-link.txt").symlink_to(outside)
+
+        assert client.get(f"/api/tasks/{task_id}/workspace/files/..%2F..%2Fetc%2Fpasswd").status_code == 422
         assert client.get(f"/api/tasks/{task_id}/workspace/files/%2Fetc%2Fpasswd").status_code == 422
+        assert client.get(f"/api/tasks/{task_id}/workspace/files/external-link.txt").status_code == 422
+        assert client.get(f"/api/tasks/{task_id}/workspace/files").json() == []
