@@ -10,6 +10,7 @@ type Conversation = { id: string; title: string; created_at: string; updated_at:
 type Message = { id: string; sequence: number; role: "user" | "assistant" | "tool"; content: string; status: string; tool_calls?: unknown[] };
 type Skill = { name: string; description: string; source: string; trust_level: string };
 type WorkspaceFile = { name: string; path: string; size_bytes: number; modified_at: string };
+type WorkspaceEntry = { kind: "directory"; name: string; path: string } | { kind: "file"; file: WorkspaceFile };
 type Envelope = { sequence: number; type: string; payload: Record<string, unknown> };
 type TokenStatus = { estimated?: string; actual?: string; compaction?: string };
 type ProgressItem = { sequence: number; label: string };
@@ -29,6 +30,32 @@ const runStatusLabels: Record<string, string> = {
 function shortTitle(input: string) { return input.replace(/\s+/g, " ").trim().slice(0, 42) || "新会话"; }
 function formatSize(bytes: number) { return bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`; }
 function Icon({ children }: { children: string }) { return <span className="icon" aria-hidden>{children}</span>; }
+function workspaceEntries(files: WorkspaceFile[], directory: string): WorkspaceEntry[] {
+  const prefix = directory ? `${directory}/` : "";
+  const directories = new Map<string, WorkspaceEntry>();
+  const directFiles: WorkspaceEntry[] = [];
+  for (const file of files) {
+    if (!file.path.startsWith(prefix)) continue;
+    const remainder = file.path.slice(prefix.length);
+    const separator = remainder.indexOf("/");
+    if (separator === -1) directFiles.push({ kind: "file", file });
+    else {
+      const name = remainder.slice(0, separator);
+      const path = `${prefix}${name}`;
+      directories.set(path, { kind: "directory", name, path });
+    }
+  }
+  const byName = (left: WorkspaceEntry, right: WorkspaceEntry) => {
+    const leftName = left.kind === "directory" ? left.name : left.file.name;
+    const rightName = right.kind === "directory" ? right.name : right.file.name;
+    return leftName.localeCompare(rightName);
+  };
+  return [...directories.values()].sort(byName).concat(directFiles.sort(byName));
+}
+function parentDirectory(path: string) { return path.split("/").slice(0, -1).join("/"); }
+function workspaceDownloadUrl(taskId: string, path: string) {
+  return `/api/tasks/${taskId}/workspace/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
 
 function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -42,6 +69,7 @@ function App() {
   const [progress, setProgress] = useState<ProgressItem[]>([]);
   const [error, setError] = useState("");
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
+  const [workspacePath, setWorkspacePath] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [tokens, setTokens] = useState<TokenStatus>({});
@@ -134,7 +162,7 @@ function App() {
     source.onerror = () => { if (source.readyState !== EventSource.CLOSED) setError("连接暂时中断，正在重连…"); };
   };
   const selectTask = async (task: Task) => {
-    stream.current?.close(); setActiveTask(task); setAnswer(""); setActivity(""); setProgress([]); setError(""); setFiles([]); setTokens({});
+    stream.current?.close(); setActiveTask(task); setAnswer(""); setActivity(""); setProgress([]); setError(""); setFiles([]); setWorkspacePath(""); setTokens({});
     const response = await fetch(`/api/tasks/${task.task_id}`);
     if (!response.ok) { setError("无法读取该会话。"); return; }
     const current = await response.json() as Task;
@@ -149,13 +177,13 @@ function App() {
     if (response.ok) { setMessages((await response.json() as { items: Message[] }).items); setAnswer(""); }
   };
   const selectConversation = async (conversation: Conversation) => {
-    stream.current?.close(); setActiveConversation(conversation); setActiveTask(undefined); setAnswer(""); setActivity(""); setProgress([]); setError(""); setFiles([]); setTokens({});
+    stream.current?.close(); setActiveConversation(conversation); setActiveTask(undefined); setAnswer(""); setActivity(""); setProgress([]); setError(""); setFiles([]); setWorkspacePath(""); setTokens({});
     await loadConversationMessages(conversation.id);
     const response = await fetch(`/api/conversations/${conversation.id}/latest-task`);
     if (response.ok) { const task = await response.json() as Task | null; if (task) { setActiveTask(task); await loadFiles(task.task_id); if (task.run && !["completed", "failed", "cancelled", "interrupted"].includes(task.run.status)) connect(task.task_id); } }
   };
   const newSession = async () => {
-    stream.current?.close(); setActiveTask(undefined); setDraft(""); setAnswer(""); setActivity(""); setProgress([]); setError(""); setFiles([]); setTokens({}); setMessages([]);
+    stream.current?.close(); setActiveTask(undefined); setDraft(""); setAnswer(""); setActivity(""); setProgress([]); setError(""); setFiles([]); setWorkspacePath(""); setTokens({}); setMessages([]);
     const response = await fetch("/api/conversations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
     if (!response.ok) { setError("无法新建会话。"); return; }
     const conversation = await response.json() as Conversation; setActiveConversation(conversation); await loadConversations();
@@ -170,7 +198,7 @@ function App() {
       if (!response.ok) throw new Error(`创建失败 (${response.status})`);
       const created = await response.json() as Task;
       setTasks((old) => [created, ...old.filter((task) => task.task_id !== created.task_id)]);
-      setActiveTask(created); setMessages((old) => [...old, { id: `optimistic-${created.task_id}`, sequence: -1, role: "user", content: input, status: "completed" }]); setDraft(""); setFiles([]); connect(created.task_id); await loadConversations();
+      setActiveTask(created); setMessages((old) => [...old, { id: `optimistic-${created.task_id}`, sequence: -1, role: "user", content: input, status: "completed" }]); setDraft(""); setFiles([]); setWorkspacePath(""); connect(created.task_id); await loadConversations();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "创建会话失败。"); setActivity(""); } finally { setIsSending(false); }
   }
   async function cancel() { if (activeTask) await fetch(`/api/tasks/${activeTask.task_id}/cancel`, { method: "POST" }); }
@@ -182,13 +210,15 @@ function App() {
     await loadFiles(activeTask.task_id);
   }
 
+  const visibleWorkspaceEntries = workspaceEntries(files, workspacePath);
+
   return <div className="app-shell">
     <aside className="sidebar"><div className="brand"><span className="brand-mark">AX</span><span>Agent-X</span></div><button className="new-chat" onClick={() => void newSession()}><Icon>＋</Icon> 新建会话</button>
       <nav className="session-list" aria-label="会话列表"><p className="section-label">历史会话</p>{conversations.length === 0 && <p className="empty-list">尚未创建会话</p>}{conversations.map((conversation) => <div className={`session-row ${activeConversation?.id === conversation.id ? "selected" : ""}`} key={conversation.id}><button className="session-item" onClick={() => void selectConversation(conversation)}><Icon>◌</Icon><span>{conversation.title}</span></button><button className="delete-chat" aria-label="删除会话" onClick={async () => { if (!window.confirm("删除此会话？")) return; await fetch(`/api/conversations/${conversation.id}`, { method: "DELETE" }); if (activeConversation?.id === conversation.id) { setActiveConversation(undefined); setActiveTask(undefined); setMessages([]); } await loadConversations(); }}>×</button></div>)}</nav><div className="sidebar-footer"><span className="avatar">AX</span><span>本地开发环境</span></div></aside>
     <main className="chat-area"><header className="chat-header"><div><strong>{activeConversation?.title || "新会话"}</strong><span className="model-chip">DeepSeek</span>{(tokens.estimated || tokens.actual || tokens.compaction) && <span className="token-status">{tokens.estimated}{tokens.actual && <> · {tokens.actual}</>}{tokens.compaction && <> · {tokens.compaction}</>}</span>}</div>{activeTask?.run && <span className={`status status-${activeTask.run.status}`}>{runStatusLabels[activeTask.run.status] || activeTask.run.status}</span>}</header>
       <div className="conversation">{!activeConversation && <div className="welcome"><div className="welcome-mark">AX</div><h1>今天想完成什么？</h1><p>Agent-X 会以流式方式协助你完成任务；历史会话与工作区仅保存在当前匿名身份下。</p></div>}{activeConversation && <>{messages.filter((message) => message.role !== "tool" && !(message.role === "assistant" && (!message.content.trim() || message.tool_calls?.length))).map((message) => <article key={message.id} className={`message ${message.role === "user" ? "user-message" : "assistant-message"}`}><div className={`message-avatar ${message.role === "assistant" ? "assistant-avatar" : ""}`}>{message.role === "user" ? "你" : "AX"}</div><div className="answer">{message.role === "assistant" ? <MarkdownMessage content={message.content} /> : message.content}</div></article>)}{activeTask?.run && ["accepted", "running"].includes(activeTask.run.status) && <article className="message assistant-message progress-message"><div className="message-avatar assistant-avatar">AX</div><div className="thinking-card"><span className="typing">{activity || "正在准备回答…"}</span>{progress.length > 1 && <ol className="progress-list">{progress.slice(0, -1).map((item) => <li key={item.sequence}>{item.label}</li>)}</ol>}</div></article>}{activeTask && answer && <article className="message assistant-message"><div className="message-avatar assistant-avatar">AX</div><div className="answer"><MarkdownMessage content={answer} /></div></article>}{activeTask?.run?.status === "failed" && <article className="message assistant-message"><div className="message-avatar assistant-avatar">AX</div><div className="answer failure-detail">运行失败：{activeTask.run.stop_reason || "未知原因"}{activeTask.run.failure_stage && <>（阶段：{activeTask.run.failure_stage}）</>}{activeTask.run.failure_code && <><br />错误类型：{activeTask.run.failure_code}</>}{activeTask.run.failure_message && <><br />错误信息：{activeTask.run.failure_message}</>}</div></article>}</>}{error && <p className="notice error-notice">{error}</p>}</div>
       <div className="composer-wrap"><div className="skill-tray">{selectedSkills.map((name) => <SkillHover name={name} chip key={name}><span className="skill-chip">✦ {name}<button aria-label={`移除 ${name}`} onClick={() => setSelectedSkills((old) => old.filter((item) => item !== name))}>×</button></span></SkillHover>)}</div><form className="composer" onSubmit={submit}><button className="skill-picker" type="button" title="选择 Skill" onClick={() => setSkillMenuOpen((open) => !open)}>✦ <span>Skills</span></button><textarea ref={draftInput} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="给 Agent-X 发送消息" rows={1} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /><button className="send" type="submit" disabled={!draft.trim() || isSending} aria-label="发送">↑</button></form>{skillMenuOpen && <div className="skill-menu">{skills.length === 0 ? <p>当前没有可用 Skill</p> : skills.map((skill) => <SkillHover name={skill.name} key={skill.name}><button className={selectedSkills.includes(skill.name) ? "chosen" : ""} onClick={() => { setSelectedSkills((old) => old.includes(skill.name) ? old.filter((item) => item !== skill.name) : [...old, skill.name]); setSkillMenuOpen(false); }}><span className="skill-menu-icon">✦</span><span><strong>{skill.name}</strong><small>{skill.description}</small></span><em>{selectedSkills.includes(skill.name) ? "已选" : skill.trust_level === "trusted" ? "可信" : "需授权"}</em></button></SkillHover>)}</div>}<div className="composer-meta"><span>Enter 发送 · Shift + Enter 换行</span>{activeTask?.run?.status === "running" && <button className="cancel" onClick={() => void cancel()}>停止生成</button>}</div></div></main>
-    <aside className="workspace-panel"><div className="workspace-heading"><div><p className="eyebrow">SESSION WORKSPACE</p><h2>工作区</h2></div><button className="upload-button" disabled={!activeTask || isUploading} onClick={() => uploadInput.current?.click()}><Icon>↑</Icon> {isUploading ? "上传中" : "上传"}</button><input ref={uploadInput} className="hidden-input" type="file" onChange={(event) => void upload(event)} /></div>{!activeTask ? <div className="workspace-empty"><div>⌁</div><p>选择或创建一个会话后，即可使用独立工作区。</p></div> : <><p className="workspace-note">Agent 与 Skill 会把这里作为当前会话的文件读写目录，并按需读取文件。</p><div className="file-list">{files.length === 0 ? <p className="files-empty">还没有文件</p> : files.map((file) => <a className="file-row" key={file.path} href={`/api/tasks/${activeTask.task_id}/workspace/files/${file.path.split("/").map(encodeURIComponent).join("/")}`}><span className="file-icon">▱</span><span className="file-name">{file.path}<small>{formatSize(file.size_bytes)}</small></span><span className="download">↓</span></a>)}</div></>}</aside>
+    <aside className="workspace-panel"><div className="workspace-heading"><div><p className="eyebrow">SESSION WORKSPACE</p><h2>工作区</h2></div><button className="upload-button" disabled={!activeTask || isUploading} onClick={() => uploadInput.current?.click()}><Icon>↑</Icon> {isUploading ? "上传中" : "上传"}</button><input ref={uploadInput} className="hidden-input" type="file" onChange={(event) => void upload(event)} /></div>{!activeTask ? <div className="workspace-empty"><div>⌁</div><p>选择或创建一个会话后，即可使用独立工作区。</p></div> : <><p className="workspace-note">Agent 与 Skill 会把这里作为当前会话的文件读写目录，并按需读取文件。</p><div className="workspace-path">{workspacePath ? <button onClick={() => setWorkspacePath(parentDirectory(workspacePath))}><Icon>←</Icon> 上一级</button> : <span>根目录</span>}<strong title={workspacePath || "根目录"}>/{workspacePath}</strong></div><div className="file-list">{visibleWorkspaceEntries.length === 0 ? <p className="files-empty">此目录还没有文件</p> : visibleWorkspaceEntries.map((entry) => entry.kind === "directory" ? <button className="file-row directory-row" key={entry.path} onClick={() => setWorkspacePath(entry.path)}><span className="file-icon">▸</span><span className="file-name">{entry.name}<small>目录</small></span><span className="download">›</span></button> : <a className="file-row" key={entry.file.path} href={workspaceDownloadUrl(activeTask.task_id, entry.file.path)}><span className="file-icon">▱</span><span className="file-name">{entry.file.name}<small>{formatSize(entry.file.size_bytes)}</small></span><span className="download">↓</span></a>)}</div></>}</aside>
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<App />);
