@@ -47,6 +47,17 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _nonnegative_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except ValueError as exc:
+        raise HistoryConfigurationError(f"{name} must be an integer") from exc
+    if value < 0:
+        raise HistoryConfigurationError(f"{name} must be zero or positive")
+    return value
+
+
 def _api_keys() -> tuple[str, ...]:
     raw = os.getenv("AGENT_API_KEYS", "")
     keys = tuple(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
@@ -66,6 +77,8 @@ class HistorySettings:
     cookie_http_only: bool = True
     cookie_same_site: str = "lax"
     api_keys: tuple[str, ...] = ()
+    workspace_retention_days: int = 30
+    workspace_cleanup_interval_seconds: int = 3_600
 
     @property
     def database_url(self) -> str:
@@ -101,6 +114,8 @@ class HistorySettings:
             cookie_http_only=_bool("ANON_COOKIE_HTTP_ONLY", True),
             cookie_same_site=same_site,
             api_keys=_api_keys(),
+            workspace_retention_days=_nonnegative_int("WORKSPACE_RETENTION_DAYS", 30),
+            workspace_cleanup_interval_seconds=_positive_int("WORKSPACE_CLEANUP_INTERVAL_SECONDS", 3_600),
         )
 
 

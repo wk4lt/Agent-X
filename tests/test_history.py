@@ -1,14 +1,15 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.config import HistorySettings
-from backend.db import create_database
+from backend.db import Conversation, create_database
 from backend.history import HistoryNotFound, HistoryRepository
 from backend.migrate import run_migrations
+from backend.workspace_cleanup import prune_expired_workspaces
 from contracts.models import RunStatus, RunView, SessionEntry, ToolCall
 
 
@@ -109,4 +110,32 @@ async def test_migration_and_structured_messages_keep_tool_pair_and_raw_history(
     other, _ = await repository.resolve_anonymous(None)
     with pytest.raises(HistoryNotFound):
         await repository.list_messages(other, conversation.id, None)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_workspace_retention_removes_only_expired_conversation_directories(tmp_path):
+    settings = settings_for(tmp_path)
+    run_migrations(settings)
+    engine, sessions = create_database(settings)
+    repository = HistoryRepository(sessions, settings)
+    principal, _ = await repository.resolve_anonymous(None)
+    expired = await repository.create_conversation(principal, "expired")
+    current = await repository.create_conversation(principal, "current")
+    now = datetime.now(timezone.utc)
+    async with sessions.begin() as session:
+        row = await session.get(Conversation, expired.id)
+        assert row is not None
+        row.updated_at = now - timedelta(days=31)
+    workspace_root = tmp_path / "workspaces"
+    (workspace_root / expired.id).mkdir(parents=True)
+    (workspace_root / expired.id / "artifact.txt").write_text("old", encoding="utf-8")
+    (workspace_root / current.id).mkdir()
+    (workspace_root / current.id / "artifact.txt").write_text("current", encoding="utf-8")
+
+    removed = await prune_expired_workspaces(repository, workspace_root, retention_days=30, now=now)
+
+    assert removed == [expired.id]
+    assert not (workspace_root / expired.id).exists()
+    assert (workspace_root / current.id / "artifact.txt").read_text(encoding="utf-8") == "current"
     await engine.dispose()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,9 +16,13 @@ from backend.config import HistorySettings, bearer_api_key
 from backend.db import create_database
 from backend.history import HistoryNotFound, HistoryRepository
 from backend.migrate import run_migrations
+from backend.workspace_cleanup import prune_expired_workspaces
 from contracts.models import (ConversationMessagePage, ConversationPage, ConversationView, CreateRunRequest,
                               CreateTaskRequest, RunStatus, TaskView, WorkspaceFile, new_id)
 from contracts.session_storage import append_session_log, session_directory
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(client: HarnessClient | None = None, workspace_root: Path | None = None,
@@ -33,9 +38,32 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
             settings.database_path.chmod(0o600)
         except OSError:
             pass
+        cleanup_task: asyncio.Task | None = None
+        if settings.workspace_retention_days:
+            async def cleanup_once() -> None:
+                removed = await prune_expired_workspaces(app.state.history, root, settings.workspace_retention_days)
+                if removed:
+                    logger.info("removed %s expired workspace directories", len(removed))
+
+            async def cleanup_loop() -> None:
+                while True:
+                    await asyncio.sleep(settings.workspace_cleanup_interval_seconds)
+                    try:
+                        await cleanup_once()
+                    except Exception:
+                        logger.exception("workspace retention cleanup failed")
+
+            try:
+                await cleanup_once()
+            except Exception:
+                logger.exception("workspace retention cleanup failed")
+            cleanup_task = asyncio.create_task(cleanup_loop(), name="workspace-retention-cleanup")
         try:
             yield
         finally:
+            if cleanup_task:
+                cleanup_task.cancel()
+                await asyncio.gather(cleanup_task, return_exceptions=True)
             for task in app.state.persistence_tasks:
                 task.cancel()
             await engine.dispose()
