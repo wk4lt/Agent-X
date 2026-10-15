@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
-from datetime import timezone, timedelta
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -215,6 +215,11 @@ class HistoryRepository:
             await self._owned_conversation(session, principal_id, conversation_id)
             return await session.scalar(select(ConversationRun).where(
                 ConversationRun.conversation_id == conversation_id).order_by(ConversationRun.created_at.desc()))
+
+    async def expired_workspace_conversation_ids(self, cutoff: datetime) -> list[str]:
+        async with self.sessions() as session:
+            statement = select(Conversation.id).where(Conversation.updated_at < cutoff)
+            return list((await session.scalars(statement)).all())
 
     async def append_harness_entries(self, principal_id: str, run_id: str, entries: list[SessionEntry]) -> None:
         """Idempotently materialize finished structured Harness entries after SSE events."""

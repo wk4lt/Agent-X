@@ -112,7 +112,10 @@ python -m pytest
 
 每个会话都有独立本地工作区：`.data/workspaces/<conversation_id>/`；同一会话内的多个 Task/Run
 复用该工作区。UI 默认支持上传、列出和下载最大 25 MiB 的文件；可在 `.env` 配置
-`WORKSPACE_ROOT` 与 `WORKSPACE_MAX_FILE_BYTES`。
+`WORKSPACE_ROOT` 与 `WORKSPACE_MAX_FILE_BYTES`。工作区默认保留 30 天，以会话最后更新时间为准；
+可通过 `WORKSPACE_RETENTION_DAYS` 调整，设为 `0` 可关闭自动清理。后台按
+`WORKSPACE_CLEANUP_INTERVAL_SECONDS`（默认 3600 秒）在启动时及后续周期中清理已过期会话的文件。
+清理不会删除会话历史记录；再次打开旧会话时只会得到一个新的空工作区。
 每个 Run 会把该工作区的绝对路径作为可信运行时元数据注入模型上下文；Agent 与 Skill 必须把它
 作为所有用户文件读写和生成产物的基准目录。Skill 脚本也会以此目录为 `cwd`，并通过
 `AGENT_X_WORKSPACE` 获得同一路径。工作区文件内容不会自动进入模型上下文，仍由 Agent 按需读取。

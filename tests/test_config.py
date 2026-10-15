@@ -43,6 +43,14 @@ def test_openai_compatible_provider_accepts_internal_http_base_url(monkeypatch):
     assert HarnessSettings.from_environment().llm_base_url == "http://10.29.93.96:3000/v1"
 
 
+def test_workspace_retention_settings_allow_disabling_cleanup(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_RETENTION_DAYS", "0")
+    monkeypatch.setenv("WORKSPACE_CLEANUP_INTERVAL_SECONDS", "120")
+    settings = HistorySettings.from_environment(base_dir=tmp_path)
+    assert settings.workspace_retention_days == 0
+    assert settings.workspace_cleanup_interval_seconds == 120
+
+
 def test_internal_run_payload_does_not_override_harness_defaults():
     request = CreateRunRequest(task_id="task_1", idempotency_key="request_1", input="hello")
     payload = request.model_dump(mode="json", exclude_unset=True)
