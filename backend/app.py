@@ -99,7 +99,8 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
 
     def workspace_file(mapping, filename: str) -> Path:
         requested = Path(filename)
-        if not filename or requested.is_absolute():
+        if (not filename or requested == Path(".") or requested.is_absolute()
+                or any(part == ".." for part in requested.parts)):
             raise HTTPException(422, "invalid_filename")
         directory = workspace(mapping).resolve()
         destination = (directory / requested).resolve()
@@ -291,13 +292,18 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
     @app.get("/api/tasks/{task_id}/workspace/files")
     async def list_workspace_files(request: Request, task_id: str) -> list[WorkspaceFile]:
         directory = workspace(await task_mapping(request, task_id)).resolve()
-        files = []
-        for dirpath, _dirnames, filenames in os.walk(directory):
+        files: list[WorkspaceFile] = []
+        for dirpath, dirnames, filenames in os.walk(directory, followlinks=False):
+            dirnames[:] = [name for name in dirnames if not (Path(dirpath) / name).is_symlink()]
             for filename in filenames:
                 path = Path(dirpath) / filename
-                if path.is_file():
+                try:
+                    if path.is_symlink() or not path.is_file():
+                        continue
                     files.append(file_view(path, directory))
-        return sorted(files, key=lambda file: file.path.lower())
+                except OSError:
+                    continue
+        return sorted(files, key=lambda item: item.path.lower())
 
     @app.post("/api/tasks/{task_id}/workspace/files", status_code=201)
     async def upload_workspace_file(request: Request, task_id: str, file: UploadFile = File(...)) -> WorkspaceFile:
