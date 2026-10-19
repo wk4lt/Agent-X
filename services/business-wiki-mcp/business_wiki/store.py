@@ -26,9 +26,14 @@ class Store:
             CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY, revision TEXT, title TEXT, content TEXT, metadata TEXT);
             CREATE TABLE IF NOT EXISTS pages(id TEXT PRIMARY KEY, revision INTEGER, title TEXT, content TEXT, metadata TEXT, citations TEXT, links TEXT);
             CREATE TABLE IF NOT EXISTS proposals(id TEXT PRIMARY KEY, payload TEXT, status TEXT);
+            CREATE TABLE IF NOT EXISTS evidence_versions(kind TEXT, item_id TEXT, revision TEXT, payload TEXT, PRIMARY KEY(kind,item_id,revision));
             CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, event TEXT, payload TEXT, at TEXT DEFAULT CURRENT_TIMESTAMP);
             CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(kind UNINDEXED, item_id UNINDEXED, chunk UNINDEXED, text, tokenize='unicode61');
             ''')
+            # Backfill the current legacy snapshots without changing their identity.
+            for kind, table in [('source', 'sources'), ('wiki', 'pages')]:
+                for row in db.execute(f"SELECT * FROM {table} t WHERE NOT EXISTS (SELECT 1 FROM evidence_versions e WHERE e.kind=? AND e.item_id=t.id AND e.revision=CAST(t.revision AS TEXT))", (kind,)).fetchall():
+                    self.archive(db, kind, self.decode(row))
 
     @contextmanager
     def db(self):
@@ -45,7 +50,7 @@ class Store:
     def metadata(meta):
         if not isinstance(meta, dict):
             raise ValueError('metadata must be an object')
-        for key in ('subsystems', 'features', 'related_subsystems'):
+        for key in ('subsystems', 'features', 'related_subsystems', 'component_ids'):
             values = meta.get(key, [])
             if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
                 raise ValueError(f'{key} must be a string list')
@@ -69,6 +74,7 @@ class Store:
             if old and old['revision'] == revision:
                 return {'source_id': source_id, 'revision': revision, 'changed': False}
             db.execute('INSERT OR REPLACE INTO sources VALUES(?,?,?,?,?)', (source_id, revision, title, content, json.dumps(metadata)))
+            self.archive(db, 'source', dict(id=source_id, revision=revision, title=title, content=content, metadata=metadata))
             self.index(db, 'source', source_id, title, content)
             db.execute('INSERT INTO audit(event,payload) VALUES(?,?)', ('ingest', json.dumps({'id': source_id, 'revision': revision})))
         return {'source_id': source_id, 'revision': revision, 'changed': True}
@@ -81,19 +87,37 @@ class Store:
                 value[key] = json.loads(value[key])
         return value
 
-    def read(self, kind, item_id):
+    @staticmethod
+    def archive(db, kind, value):
+        db.execute('INSERT OR IGNORE INTO evidence_versions VALUES(?,?,?,?)',
+                   (kind, value['id'], str(value['revision']), json.dumps(value)))
+
+    def read(self, kind, item_id, revision=None):
         if kind not in ('source', 'wiki'):
             raise ValueError('kind must be source or wiki')
         with self.db() as db:
-            row = db.execute(f"SELECT * FROM {'sources' if kind == 'source' else 'pages'} WHERE id=?", (item_id,)).fetchone()
-            if row is None:
-                raise ValueError('item not found')
-            result = self.decode(row)
+            if revision is not None:
+                archived = db.execute('SELECT payload FROM evidence_versions WHERE kind=? AND item_id=? AND revision=?',
+                                      (kind, item_id, str(revision))).fetchone()
+                if archived is None:
+                    raise ValueError('evidence revision not found')
+                result = json.loads(archived['payload'])
+            else:
+                row = db.execute(f"SELECT * FROM {'sources' if kind == 'source' else 'pages'} WHERE id=?", (item_id,)).fetchone()
+                if row is None:
+                    raise ValueError('item not found')
+                result = self.decode(row)
             if kind == 'wiki':
+                versions = []
+                for citation in result['citations']:
+                    archived = db.execute("SELECT payload FROM evidence_versions WHERE kind='source' AND item_id=? AND revision=?",
+                                          (citation['source_id'], str(citation['revision']))).fetchone()
+                    versions.append(json.loads(archived['payload'])['metadata'].get('version_status', 'unknown') if archived else 'unknown')
+                result['evidence_version_status'] = 'confirmed' if versions and all(v == 'confirmed' for v in versions) else 'unknown'
                 result['stale'] = any(not (s := db.execute('SELECT revision FROM sources WHERE id=?', (c['source_id'],)).fetchone()) or s['revision'] != c['revision'] for c in result['citations'])
             return result
 
-    def search(self, query, subsystems=None, features=None, kind='all', limit=8):
+    def search(self, query, subsystems=None, features=None, kind='all', limit=8, component_ids=None):
         if kind not in ('all', 'source', 'wiki') or not 1 <= limit <= 30:
             raise ValueError('invalid kind or limit (1..30)')
         terms = list(dict.fromkeys(tokens(query).split()))[:64]
@@ -116,12 +140,18 @@ class Store:
                 meta = record['metadata']
                 if subsystems and not set(subsystems).intersection(meta.get('subsystems', []) + meta.get('related_subsystems', [])):
                     continue
+                if component_ids and not set(component_ids).intersection(meta.get('component_ids', [])):
+                    continue
                 if features and not set(features).intersection(meta.get('features', [])):
                     continue
                 seen.add(key)
                 output.append({'kind': row['kind'], 'id': row['item_id'], 'title': record['title'], 'revision': record['revision'], 'metadata': meta, 'excerpt': row['chunk'], 'score': row['score']})
                 if len(output) == limit:
                     break
+        for hit in output:
+            if hit['kind'] == 'wiki':
+                detail = self.read('wiki', hit['id'])
+                hit.update(stale=detail['stale'], evidence_version_status=detail['evidence_version_status'])
         return {'results': output, 'suggestion': None if output else 'broaden features, then related subsystems/COMMON'}
 
     def propose(self, pages):
@@ -170,6 +200,7 @@ class Store:
                         raise ValueError('source revision/quotation mismatch')
             for p in pages:
                 db.execute('INSERT OR REPLACE INTO pages VALUES(?,?,?,?,?,?,?)', (p['id'],p['expected_revision']+1,p['title'],p['content'],json.dumps(p['metadata']),json.dumps(p['citations']),json.dumps(p['links'])))
+                self.archive(db, 'wiki', {k:v for k,v in p.items() if k != 'expected_revision'} | {'revision': p['expected_revision'] + 1})
                 self.index(db,'wiki',p['id'],p['title'],p['content'])
             db.execute("UPDATE proposals SET status='applied' WHERE id=?", (proposal_id,))
             db.execute('INSERT INTO audit(event,payload) VALUES(?,?)', ('apply', proposal['payload']))

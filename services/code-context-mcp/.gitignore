@@ -1,0 +1,9 @@
+.venv/
+data/
+*.sqlite3*
+*.egg-info/
+dist/
+build/
+__pycache__/
+.pytest_cache/
+node_modules/

@@ -1,0 +1,8 @@
+{
+  "name": "agent-x-code-context-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pinned CodeGraph SDK used by the Python MCP adapter",
+  "engines": {"node": ">=24 <25"},
+  "dependencies": {"@colbymchenry/codegraph": "1.6.2"}
+}

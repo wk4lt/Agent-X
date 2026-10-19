@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -97,6 +98,7 @@ class HarnessSettings:
     skill_max_timeout_seconds: float
     skill_max_output_bytes: int
     skill_max_concurrent_scripts_per_run: int
+    mcp_maintenance_servers: tuple[str, ...] = ()
 
     @classmethod
     def from_environment(cls) -> "HarnessSettings":
@@ -134,8 +136,12 @@ class HarnessSettings:
         extensions = tuple(item.strip() for item in os.getenv("SKILL_ALLOWED_EXTENSIONS", ".py,.sh").split(",") if item.strip())
         if not extensions or any(item not in {".py", ".sh"} for item in extensions):
             raise ConfigurationError("SKILL_ALLOWED_EXTENSIONS only supports .py and .sh")
+        maintenance = tuple(dict.fromkeys(item.strip() for item in os.getenv("MCP_MAINTENANCE_SERVERS", "").split(",") if item.strip()))
+        if any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", item) for item in maintenance):
+            raise ConfigurationError("MCP_MAINTENANCE_SERVERS must contain explicit MCP server names")
         return cls(
             provider=provider, llm_base_url=base_url, llm_api_key=key,
+            mcp_maintenance_servers=maintenance,
             model=os.getenv("LLM_MODEL", "deepseek-flash"),
             llm_timeout_seconds=_seconds("LLM_TIMEOUT_SECONDS", 90, minimum=1, maximum=600),
             llm_max_attempts=_integer("LLM_MAX_ATTEMPTS", 3, minimum=1, maximum=10),

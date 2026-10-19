@@ -37,7 +37,8 @@ def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog 
     app = FastAPI(title="Agent-X Harness", version="0.1.0")
     settings = settings or HarnessSettings.from_environment()
     store = InMemorySessionStore()
-    policy = ToolPolicy(allow_writes=False)
+    policy = ToolPolicy(allow_writes=False, maintenance_sources=frozenset(
+        f"mcp:{name}" for name in settings.mcp_maintenance_servers))
     selected_provider = provider or provider_from_settings(settings)
     mcp_registry = McpToolRegistry.from_file(
         settings.mcp_config_path,
