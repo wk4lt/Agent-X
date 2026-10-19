@@ -1,5 +1,5 @@
 ---
-name: business_knowledge_qa
+name: business-knowledge-qa
 description: 检索业务 Wiki 和原始设计资料，并通过 CodeGraph 验证实现。
 tool_groups: [business_knowledge, code_doc]
 ---

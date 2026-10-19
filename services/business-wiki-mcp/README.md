@@ -112,3 +112,12 @@ links 是页面 ID 列表，wiki_lint 检测断链，不自动修复或判断语
 优先用一个子系统的实际资料与 20 个固定问题，比较原文 RAG 与 Wiki+原文的
 答案证据准确率、工具次数、token、入库成本。之后加入 embedding/RRF/rerank、
 异步入库任务、多租户 ACL、不可变来源版本、Markdown 导出和代码变更影响追踪。
+
+## 通用项目初始化与代码协同（v0.1）
+
+新增 `--projects-root /absolute/path/wiki-projects` 启用严格项目/基线模式；可重复 `--project <id>` 限制项目白名单。
+项目初始化由 project_init/project_get/project_propose/project_apply 保存、恢复和确认结构化草稿，
+project_route 提供组件别名、特性、文档和代码入口路由。新模式下所有知识工具均要求 project_id/baseline_id，
+按独立数据库隔离，旧单库内容不自动暴露。来源和 Wiki 版本归档支持 knowledge_read(revision=...) 复现旧证据。
+
+完整安装、MCP 配置、两个 Skill、真实仓库演示和边界见 [Code Context MCP](../code-context-mcp/README.md)。

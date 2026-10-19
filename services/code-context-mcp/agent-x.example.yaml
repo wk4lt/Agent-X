@@ -1,0 +1,50 @@
+# Merge these four entries into mcp_servers.yaml; replace /srv/Agent-X and /srv/knowledge.
+# Harness admin deployment: MCP_MAINTENANCE_SERVERS=project_wiki_writer,project_code_writer
+# Install BOTH Python service packages into /srv/knowledge/.venv (SDK v1); Harness uses its own venv.
+version: 1
+servers:
+  project_wiki:
+    transport: stdio
+    command: /srv/knowledge/.venv/bin/business-wiki-mcp
+    args: [--projects-root, /srv/knowledge/wiki, --project, demo]
+    tool_groups: [project_read]
+    allowed_tools: [project_get, project_route, knowledge_search, knowledge_read, wiki_lint]
+    risk: read_only
+    parallel_safe: true
+    idempotent: true
+    timeout_seconds: 60
+    max_result_bytes: 65536
+  project_wiki_writer:
+    transport: stdio
+    command: /srv/knowledge/.venv/bin/business-wiki-mcp
+    args: [--projects-root, /srv/knowledge/wiki, --project, demo, --writable]
+    tool_groups: [project_maintenance]
+    allowed_tools: [project_init, project_propose, project_apply, source_ingest, wiki_compile, wiki_propose_update, wiki_apply_update]
+    risk: workspace_write
+    parallel_safe: false
+    idempotent: false
+    timeout_seconds: 120
+    max_result_bytes: 65536
+    # Optional AI compilation: add env_from for WIKI_LLM_BASE_URL, WIKI_LLM_API_KEY, WIKI_LLM_MODEL.
+  project_code:
+    transport: stdio
+    command: /srv/knowledge/.venv/bin/code-context-mcp
+    args: [--data, /srv/knowledge/code, --roots, /srv/knowledge/roots.json, --project, demo]
+    tool_groups: [code_read]
+    allowed_tools: [code_search, code_read, code_relations, code_status]
+    risk: read_only
+    parallel_safe: true
+    idempotent: true
+    timeout_seconds: 60
+    max_result_bytes: 65536
+  project_code_writer:
+    transport: stdio
+    command: /srv/knowledge/.venv/bin/code-context-mcp
+    args: [--data, /srv/knowledge/code, --roots, /srv/knowledge/roots.json, --project, demo, --writable]
+    tool_groups: [code_maintenance]
+    allowed_tools: [code_discover, code_build]
+    risk: workspace_write
+    parallel_safe: false
+    idempotent: false
+    timeout_seconds: 60
+    max_result_bytes: 65536

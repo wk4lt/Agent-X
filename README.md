@@ -236,3 +236,12 @@ export KNOWLEDGE_MCP_AUTHORIZATION='Bearer ...'
 
 独立的原文 RAG 与 AI Wiki 服务，支持子系统/特性过滤、来源引用和版本校验。
 安装、模型配置和 MCP 接入见 [Business Wiki MCP](services/business-wiki-mcp/README.md)。
+
+## 通用研发项目知识底座
+
+Wiki 与 CodeGraph 通过项目、基线、组件和特性关联。选择 `project-init` Skill 可引导发现资料、确认架构、
+保存可恢复草稿并构建索引；`project-qa` 在同一版本范围内联合检索设计文档与代码，返回可追溯证据。
+代码侧提供独立 Code Context MCP，使用固定快照与真实 CodeGraph SDK，构建任务可跨 MCP 连接继续运行。
+
+安装和完整示例见 [Code Context MCP](services/code-context-mcp/README.md)，
+实际效果见 [Agent-X 仓库验证报告](docs/examples/knowledge-demo-agent-x.md)。

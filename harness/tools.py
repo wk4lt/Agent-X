@@ -37,16 +37,22 @@ class ToolCatalog:
 
 
 class ToolPolicy:
-    def __init__(self, allow_writes: bool = False) -> None:
+    def __init__(self, allow_writes: bool = False, *, maintenance_sources: frozenset[str] = frozenset()) -> None:
         self.allow_writes = allow_writes
+        self.maintenance_sources = maintenance_sources
+
+    def _allowed(self, tool: RegisteredTool) -> bool:
+        return (tool.spec.risk == RiskLevel.read_only or self.allow_writes
+                or (tool.spec.risk == RiskLevel.workspace_write
+                    and tool.spec.source in self.maintenance_sources))
 
     def filter(self, catalog: ToolCatalog) -> list[RegisteredTool]:
-        return catalog.active(allow_writes=self.allow_writes)
+        return [tool for tool in catalog.active(allow_writes=True) if self._allowed(tool)]
 
     def validate(self, tool: RegisteredTool | None, call: ToolCall) -> ToolResult | None:
         if tool is None:
             return ToolResult(ok=False, content="Requested tool is not available.", error_code="tool_not_found")
-        if tool.spec.requires_approval or (tool.spec.risk != RiskLevel.read_only and not self.allow_writes):
+        if tool.spec.requires_approval or not self._allowed(tool):
             return ToolResult(ok=False, content="Tool requires approval.", error_code="approval_required")
         if not isinstance(call.arguments, dict):
             return ToolResult(ok=False, content="Tool arguments must be an object.", error_code="invalid_arguments")
