@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any, AsyncContextManager, Protocol
 from urllib.parse import urlparse
 
+import anyio
 import yaml
 
 from contracts.models import RiskLevel, ToolResult, ToolSpec
@@ -23,6 +25,7 @@ from harness.tools import RegisteredTool
 SERVER_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 GROUP_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+LOG = logging.getLogger("agent_x.mcp")
 
 
 class McpConfigurationError(ValueError):
@@ -36,6 +39,114 @@ class McpClientProtocol(Protocol):
 
 
 McpClientFactory = Callable[["McpServerConfig"], AsyncContextManager[McpClientProtocol]]
+
+
+def _connection_error(exc: BaseException) -> bool:
+    """Only transport failures qualify for automatic replay, never tool errors."""
+    if isinstance(exc, BaseExceptionGroup):
+        return all(_connection_error(child) for child in exc.exceptions)
+    if isinstance(exc, (ConnectionError, anyio.BrokenResourceError,
+                        anyio.ClosedResourceError, anyio.EndOfStream)):
+        return True
+    # Keep the SDK optional for deployments/tests which do not enable MCP.
+    try:
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import CONNECTION_CLOSED
+        if isinstance(exc, MCPError) and exc.code == CONNECTION_CLOSED:
+            return True
+    except ImportError:  # pragma: no cover - SDK is an optional deployment dependency
+        pass
+    import httpx
+    if isinstance(exc, httpx.NetworkError):
+        return True
+    try:
+        import httpx2
+        if isinstance(exc, httpx2.NetworkError):
+            return True
+    except ImportError:  # pragma: no cover - only needed by SDK v2 HTTP transport
+        pass
+    return False
+
+
+@dataclass
+class _ClientRequest:
+    method: str
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+    future: asyncio.Future
+
+
+class _ServerConnection:
+    """Own the SDK context in one task for its entire lifetime.
+
+    ToolExecutor uses wait_for(), so individual handler tasks are short-lived and
+    cancellable. They must never own an MCP/AnyIO context that outlives them.
+    The registry serializes requests per server; this queue transfers operations
+    to the owner task without transferring ownership of its cancel scopes.
+    """
+
+    def __init__(self, server: "McpServerConfig", factory: McpClientFactory) -> None:
+        self._server = server
+        self._factory = factory
+        self._queue: asyncio.Queue[_ClientRequest] = asyncio.Queue()
+        self._started = asyncio.Event()
+        self._scope: anyio.CancelScope | None = None
+        self._failure: BaseException = ConnectionError("MCP connection closed")
+        self._task = asyncio.create_task(self._serve(), name=f"mcp:{server.name}")
+
+    async def request(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        if self._task.done():
+            raise self._failure
+        future = asyncio.get_running_loop().create_future()
+        self._queue.put_nowait(_ClientRequest(method, args, kwargs, future))
+        return await future
+
+    async def aclose(self) -> None:
+        await self._started.wait()
+        assert self._scope is not None
+        # AnyIO cancellation lets the SDK shield its bounded subprocess cleanup.
+        # Native task.cancel() can interrupt that cleanup and leak a process.
+        self._scope.cancel()
+        await asyncio.shield(self._task)
+
+    async def _serve(self) -> None:
+        current: _ClientRequest | None = None
+        connected_at = time.perf_counter()
+        try:
+            with anyio.CancelScope() as scope:
+                self._scope = scope
+                self._started.set()
+                async with self._factory(self._server) as client:
+                    LOG.info("MCP connected server=%s transport=%s connect_ms=%.2f",
+                             self._server.name, self._server.transport,
+                             (time.perf_counter() - connected_at) * 1000)
+                    while True:
+                        current = await self._queue.get()
+                        if current.future.cancelled():
+                            current = None
+                            continue
+                        try:
+                            result = await getattr(client, current.method)(*current.args, **current.kwargs)
+                        except Exception as exc:
+                            if not current.future.done():
+                                current.future.set_exception(exc)
+                        else:
+                            if not current.future.done():
+                                current.future.set_result(result)
+                        current = None
+        except BaseException as exc:
+            self._failure = (ConnectionError("MCP owner task stopped")
+                             if isinstance(exc, asyncio.CancelledError) else exc)
+            LOG.warning("MCP connection stopped server=%s error_type=%s",
+                        self._server.name, type(exc).__name__)
+        finally:
+            if current is not None and not current.future.done():
+                current.future.set_exception(self._failure)
+            while not self._queue.empty():
+                pending = self._queue.get_nowait()
+                if not pending.future.done():
+                    pending.future.set_exception(self._failure)
+            LOG.info("MCP disconnected server=%s", self._server.name)
 
 
 @dataclass(frozen=True)
@@ -349,7 +460,64 @@ class McpToolRegistry:
         self._discovery_timeout_seconds = discovery_timeout_seconds
         self._schema_cache_ttl_seconds = schema_cache_ttl_seconds
         self._cache: dict[str, _CacheEntry] = {}
+        self._clients: dict[str, _ServerConnection] = {}
+        self._closed = False
+        self._close_task: asyncio.Task | None = None
+        # Locks survive reconnects: waiters must keep sharing the same lock.
         self._locks = {server.name: asyncio.Lock() for server in servers}
+
+    async def aclose(self) -> None:
+        """Stop accepting requests and release all SDK sessions/subprocesses."""
+        if self._close_task is None:
+            self._closed = True
+            clients = list(self._clients.values())
+            self._clients.clear()
+            self._cache.clear()
+
+            async def close_all() -> None:
+                await asyncio.gather(*(client.aclose() for client in clients))
+
+            self._close_task = asyncio.create_task(close_all(), name="mcp:shutdown")
+        await asyncio.shield(self._close_task)
+
+    async def _drop_client(self, name: str) -> None:
+        client = self._clients.get(name)
+        if client is not None:
+            try:
+                await client.aclose()
+            finally:
+                if self._clients.get(name) is client:
+                    self._clients.pop(name)
+
+    async def _request(self, server: McpServerConfig, method: str, *args: Any,
+                       **kwargs: Any) -> Any:
+        """Called with the stable server lock held, including during discovery."""
+        attempts = 2 if method == "list_tools" or server.idempotent else 1
+        for attempt in range(attempts):
+            if self._closed:
+                raise RuntimeError("MCP registry is closed")
+            client = self._clients.get(server.name)
+            if client is None:
+                client = self._clients[server.name] = _ServerConnection(server, self._client_factory)
+            try:
+                return await client.request(method, *args, **kwargs)
+            except asyncio.CancelledError:
+                # A cancelled/expired in-flight request leaves its outcome unknown.
+                # Close it in its owner task and let the next caller reconnect.
+                await self._drop_client(server.name)
+                raise
+            except Exception as exc:
+                if not _connection_error(exc):
+                    if client._task.done():
+                        # Failed initialization must not poison later discovery.
+                        await self._drop_client(server.name)
+                    raise
+                await self._drop_client(server.name)
+                if attempt + 1 == attempts:
+                    raise
+                LOG.warning("MCP reconnecting server=%s method=%s attempt=%d/%d error_type=%s",
+                            server.name, method, attempt + 2, attempts, type(exc).__name__)
+        raise AssertionError("unreachable")
 
     @classmethod
     def from_file(
@@ -380,6 +548,8 @@ class McpToolRegistry:
         )
 
     async def tools_for_groups(self, groups: set[str]) -> McpToolSelection:
+        if self._closed:
+            raise RuntimeError("MCP registry is closed")
         selected = tuple(
             server for server in self._servers
             if server.enabled and groups.intersection(server.tool_groups)
@@ -463,38 +633,46 @@ class McpToolRegistry:
         discovered: list[_DiscoveredTool] = []
         cursor: str | None = None
         pages = 0
-        async with self._client_factory(server) as client:
-            while True:
-                pages += 1
-                if pages > 100:
-                    raise RuntimeError("MCP tool pagination exceeded 100 pages")
-                page = await client.list_tools(cursor=cursor)
-                for tool in page.tools:
-                    schema = tool.input_schema
-                    if not isinstance(schema, dict):
-                        raise TypeError("MCP tool input_schema must be an object")
-                    discovered.append(
-                        _DiscoveredTool(tool.name, tool.title, tool.description, schema)
-                    )
-                cursor = getattr(page, "next_cursor", None)
-                if cursor is None:
-                    break
+        while True:
+            pages += 1
+            if pages > 100:
+                raise RuntimeError("MCP tool pagination exceeded 100 pages")
+            page = await self._request(server, "list_tools", cursor=cursor)
+            for tool in page.tools:
+                schema = tool.input_schema
+                if not isinstance(schema, dict):
+                    raise TypeError("MCP tool input_schema must be an object")
+                discovered.append(
+                    _DiscoveredTool(tool.name, tool.title, tool.description, schema)
+                )
+            cursor = getattr(page, "next_cursor", None)
+            if cursor is None:
+                break
         return tuple(discovered)
 
     async def _call(
         self, server: McpServerConfig, tool_name: str, arguments: dict[str, Any]
     ) -> ToolResult:
+        queued_at = time.perf_counter()
         try:
-            async with self._client_factory(server) as client:
-                result = await client.call_tool(tool_name, arguments)
+            async with self._locks[server.name]:
+                started = time.perf_counter()
+                try:
+                    result = await self._request(server, "call_tool", tool_name, arguments)
+                finally:
+                    LOG.info("MCP call server=%s tool=%s queue_ms=%.2f call_ms=%.2f",
+                             server.name, tool_name, (started - queued_at) * 1000,
+                             (time.perf_counter() - started) * 1000)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            LOG.warning("MCP call failed server=%s tool=%s error_type=%s",
+                        server.name, tool_name, type(exc).__name__)
             return ToolResult(
                 ok=False,
                 content=f"MCP server {server.name!r} is unavailable ({type(exc).__name__}).",
                 error_code="mcp_server_unavailable",
-                retryable=server.idempotent,
+                retryable=server.idempotent and _connection_error(exc),
             )
         content = _render_result(result)
         if getattr(result, "is_error", False):

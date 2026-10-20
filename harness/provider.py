@@ -14,7 +14,8 @@ from contracts.models import ToolCall, Usage
 
 
 LOG = logging.getLogger("agent_x.provider")
-RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+# Internal gateways can transiently lose a route even for a valid model/request.
+RETRYABLE_HTTP_STATUSES = {404, 408, 429, 500, 502, 503, 504}
 
 
 @dataclass
@@ -199,10 +200,7 @@ class OpenAICompatibleProvider:
 
     @staticmethod
     def _retryable_response(status_code: int, body: str) -> bool:
-        if status_code in RETRYABLE_HTTP_STATUSES:
-            return True
-        normalized = body.lower()
-        return status_code == 404 and "model" in normalized and "does not exist" in normalized
+        return status_code in RETRYABLE_HTTP_STATUSES
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float | None:

@@ -1,7 +1,8 @@
 version: 1
 
 servers:
-  # Local MCP server launched as a subprocess for each discovery/tool call.
+  # One persistent subprocess per server, lazily opened by discovery/tool calls.
+  # Calls to the same server are serialized across all runs in this harness worker.
   codegraph:
     transport: stdio
     command: python
@@ -12,7 +13,7 @@ servers:
     risk: read_only
     parallel_safe: true
     idempotent: true
-    max_concurrency: 4
+    max_concurrency: 1
     timeout_seconds: 30
     # Values are read from the Agent-X process environment, never stored here.
     env_from:
