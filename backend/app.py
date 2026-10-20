@@ -144,7 +144,8 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
 
     def task_view(mapping, run=None) -> TaskView:
         return TaskView(task_id=mapping.task_id, project_id=mapping.project_id, input=mapping.input,
-                        conversation_id=mapping.conversation_id, run=run)
+                        conversation_id=mapping.conversation_id, session_id=mapping.session_id,
+                        run_id=mapping.run_id, run=run)
 
     async def persist_run_entries(principal_id: str, run_id: str) -> None:
         entries = await app.state.client.session_entries(run_id)
