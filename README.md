@@ -95,8 +95,9 @@ AGENT_X_HOST=0.0.0.0 HARNESS_PORT=8101 BACKEND_PORT=8100 WEB_PORT=5273 ./dev.sh 
 没有凭据时 Harness 使用 `EchoProvider` 返回安全、确定性的结果。启动时会校验模型设置、HTTPS
 基础地址、上下文窗口、输出预留、工具结果上限、超时和并发配置；密钥不会写入日志。
 
-OpenAI 兼容 Provider 默认最多尝试 3 次，并对连接错误、超时、`408/429/5xx`，以及明确返回
-“model does not exist”的 `404` 使用指数退避。重试只会发生在尚未向客户端输出任何流式内容时，
+OpenAI 兼容 Provider 默认最多尝试 3 次，并对连接错误、超时、`404/408/429/500/502/503/504`
+使用指数退避，覆盖内部网关偶发的空白或路由 `404`；持续的错误配置会在尝试耗尽后失败。
+重试只会发生在尚未向客户端输出任何流式内容时，
 避免产生重复文本或重复 Tool Call。可通过 `LLM_MAX_ATTEMPTS`、
 `LLM_RETRY_BASE_DELAY_SECONDS` 和 `LLM_RETRY_MAX_DELAY_SECONDS` 调整。
 
@@ -106,7 +107,8 @@ OpenAI 兼容 Provider 默认最多尝试 3 次，并对连接错误、超时、
 python -m pytest
 ```
 
-测试使用脚本化的假 Provider 与 Tool，不需要模型或 MCP 凭据。
+测试使用假 Provider、Tool 和本地 MCP 子进程，不需要模型或 MCP 凭据；真实 stdio 测试覆盖
+连接复用、子进程被杀后的重建、取消后的清理和关闭时的进程回收。
 
 ## 会话工作区
 
@@ -228,8 +230,18 @@ tool_groups: [code_doc]
 export KNOWLEDGE_MCP_AUTHORIZATION='Bearer ...'
 ```
 
-工具 schema 缓存在进程内，默认 300 秒；每次实际调用建立并关闭独立 MCP 连接，避免并发 Run 共享
-失效会话。配置的 Server 清单可通过 Harness 的 `GET /internal/mcp/servers` 查看；该接口不返回命令
+工具 schema 缓存在进程内，默认 300 秒。每个 Harness worker 按 Server 名懒创建一条长驻连接，
+工具发现与实际调用共用该连接；所有 Run 对同一 Server 的调用串行，不同 Server 可并行。
+建议 `max_concurrency: 1`；更大的值不会突破连接层串行限制。Server 应通过工具参数显式区分项目、
+版本等请求范围；需要独立会话状态的服务应使用不同 Server 配置名。
+
+连接中断时释放旧连接；仅 `idempotent: true` 的工具自动重连并重试一次，工具业务错误不自动重放。
+超时或取消会清理正在使用的连接，下一次调用再重建；取消尚在排队的请求不会打断其他 Run 的调用。
+Harness 退出时先停止运行中的任务，再异步关闭所有 MCP 连接。`agent_x.mcp` 日志包含建连耗时、
+锁排队耗时、调用耗时和重连原因类型，不记录工具参数或凭据。毫秒级热调用应通过实际工具测量，
+不代表消除了 MCP 服务内部的额外进程启动或检索开销。
+
+配置的 Server 清单可通过 Harness 的 `GET /internal/mcp/servers` 查看；该接口不返回命令
 参数、URL、Header 或环境变量值。未选择声明了 `tool_groups` 的 Skill 时，不会向模型暴露 MCP 工具。
 
 ## 业务知识 Wiki MCP

@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -113,7 +114,12 @@ async def test_reads_deepseek_cache_usage_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_retries_inconsistent_model_not_found_before_streaming(monkeypatch):
+@pytest.mark.parametrize("body", [
+    '{"error":{"message":"The model `deepseekv4-flash-XS` does not exist."}}',
+    "",
+    "<html>route not found</html>",
+])
+async def test_retries_404_before_streaming(monkeypatch, body):
     attempts = 0
     success = 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n' \
         'data: [DONE]\n\n'
@@ -122,9 +128,7 @@ async def test_retries_inconsistent_model_not_found_before_streaming(monkeypatch
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            return httpx.Response(404, json={
-                "error": {"message": "The model `deepseekv4-flash-XS` does not exist."}
-            })
+            return httpx.Response(404, content=body)
         return httpx.Response(200, content=success, headers={"content-type": "text/event-stream"})
 
     transport = httpx.MockTransport(handler)
@@ -149,13 +153,14 @@ async def test_retries_inconsistent_model_not_found_before_streaming(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_does_not_retry_an_unrelated_404(monkeypatch):
+@pytest.mark.parametrize("status, expected_attempts", [(404, 3), (400, 1), (401, 1), (403, 1)])
+async def test_http_failures_respect_attempt_limit(monkeypatch, status, expected_attempts):
     attempts = 0
 
     async def handler(request):
         nonlocal attempts
         attempts += 1
-        return httpx.Response(404, json={"error": {"message": "route not found"}})
+        return httpx.Response(status, json={"error": {"message": "route not found"}})
 
     transport = httpx.MockTransport(handler)
     real_async_client = httpx.AsyncClient
@@ -170,10 +175,44 @@ async def test_does_not_retry_an_unrelated_404(monkeypatch):
         retry_base_delay_seconds=0, retry_max_delay_seconds=0,
     )
 
-    with pytest.raises(ProviderError, match="provider_http_404"):
+    with pytest.raises(ProviderError, match=f"provider_http_{status}"):
         _ = [delta async for delta in provider.stream(
             ProviderRequest(model="dp", messages=[], tools=[])
         )]
+    assert attempts == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_cancelling_404_backoff_does_not_send_another_request(monkeypatch):
+    attempts = 0
+    sleeping = asyncio.Event()
+
+    async def handler(request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(404)
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr("harness.provider.httpx.AsyncClient", lambda **kwargs:
+                        real_async_client(**kwargs, transport=httpx.MockTransport(handler)))
+    real_sleep = asyncio.sleep
+
+    async def backoff(delay):
+        sleeping.set()
+        await real_sleep(60)
+
+    monkeypatch.setattr("harness.provider.asyncio.sleep", backoff)
+    provider = OpenAICompatibleProvider("https://provider.example/v1", "test-key")
+
+    async def consume():
+        return [delta async for delta in provider.stream(
+            ProviderRequest(model="dp", messages=[], tools=[]))]
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(sleeping.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert attempts == 1
 
 

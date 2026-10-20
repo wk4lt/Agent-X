@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -34,7 +35,21 @@ def default_catalog(settings: HarnessSettings) -> ToolCatalog:
 
 def create_app(*, provider: ProviderAdapter | None = None, catalog: ToolCatalog | None = None,
                settings: HarnessSettings | None = None) -> FastAPI:
-    app = FastAPI(title="Agent-X Harness", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            yield
+        finally:
+            # Stop runs before closing their shared MCP connections.
+            tasks = [task for task in app.state.tasks.values() if not task.done()]
+            for task in tasks:
+                task.cancel()
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                await mcp_registry.aclose()
+
+    app = FastAPI(title="Agent-X Harness", version="0.1.0", lifespan=lifespan)
     settings = settings or HarnessSettings.from_environment()
     store = InMemorySessionStore()
     policy = ToolPolicy(allow_writes=False, maintenance_sources=frozenset(

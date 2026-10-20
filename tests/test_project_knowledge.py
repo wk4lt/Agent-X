@@ -89,3 +89,4 @@ async def test_real_harness_can_initialize_and_read_project(tmp_path, monkeypatc
     result = await tool.handler(scope)
     assert result.ok
     assert json.loads(result.content)['status'] == 'draft'
+    await executor.mcp_registry.aclose()

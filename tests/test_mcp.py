@@ -139,6 +139,8 @@ async def test_registry_namespaces_filters_caches_and_calls_tools(tmp_path):
     result = await first.tools[0].handler({"query": "MCP"})
     assert result.ok and result.content == "found:MCP"
     assert ("call", "lookup", {"query": "MCP"}) in calls
+    assert len([call for call in calls if call[0] == "open"]) == 1
+    await registry.aclose()
 
 
 @pytest.mark.asyncio
@@ -158,6 +160,7 @@ async def test_real_sdk_stdio_discovery_and_call():
     assert [tool.spec.name for tool in selection.tools] == ["mcp__echo__echo"]
     result = await selection.tools[0].handler({"value": "hello"})
     assert result.ok and result.content == "mcp:hello"
+    await registry.aclose()
 
 
 @pytest.mark.asyncio
@@ -209,3 +212,4 @@ async def test_selected_skill_mounts_its_mcp_tool_for_the_run(tmp_path, monkeypa
     event_types = [event.type for event in await store.events_after(run.run_id)]
     assert "mcp.tools.mounted" in event_types
     assert ("call", "lookup", {"query": "Agent-X"}) in calls
+    await registry.aclose()
