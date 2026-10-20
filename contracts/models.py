@@ -239,6 +239,8 @@ class TaskView(BaseModel):
     project_id: str
     input: str
     conversation_id: str | None = None
+    session_id: str | None = None
+    run_id: str | None = None
     run: RunView | None = None
 
 

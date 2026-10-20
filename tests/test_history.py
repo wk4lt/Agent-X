@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
@@ -72,6 +73,27 @@ def test_follow_up_reuses_the_conversation_harness_session(tmp_path):
     assert harness.requests[0].session_id is None
     assert harness.requests[1].session_id == first.json()["run"]["session_id"]
     assert second.json()["run"]["session_id"] == first.json()["run"]["session_id"]
+
+
+def test_log_identifiers_survive_unavailable_harness(tmp_path, monkeypatch):
+    harness = FakeHarness()
+    app = create_app(client=harness, history_settings=settings_for(tmp_path), workspace_root=tmp_path / "work",
+                     log_root=tmp_path / "logs")
+    with TestClient(app) as browser:
+        created = browser.post("/api/tasks", json={"input": "find this run in logs"}).json()
+        session_id, run_id = created["run"]["session_id"], created["run"]["run_id"]
+        assert created["session_id"] == session_id and created["run_id"] == run_id
+
+        async def missing_run(_run_id):
+            raise httpx.ConnectError("harness restarted")
+
+        monkeypatch.setattr(harness, "get_run", missing_run)
+        historical = browser.get(f"/api/conversations/{created['conversation_id']}/latest-task").json()
+        listed = browser.get("/api/tasks").json()[0]
+        for task in (historical, listed):
+            assert task["run"] is None
+            assert task["session_id"] == session_id and task["run_id"] == run_id
+            assert task["task_id"] == created["task_id"]
 
 
 @pytest.mark.asyncio

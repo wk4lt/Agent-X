@@ -124,6 +124,8 @@ python -m pytest
 
 运行诊断分别以 JSONL 写入 `LOG_ROOT/<session_id>/`，服务标准输出写入
 `LOG_ROOT/services/`；两个目录均可配置。
+会话页面顶部显示可复制的 Session ID；展开“日志定位”可查看和复制会话记录 ID、Run ID、Task ID
+以及日志目录。尚未提交任务时显示会话记录 ID；历史任务即使在 Harness 重启后也保留这些定位信息。
 
 ## 持久化会话历史
 
