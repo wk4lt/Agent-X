@@ -5,7 +5,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from contracts.models import CreateRunRequest, ToolCall, ToolResult, ToolSpec, Usage
+from contracts.models import CreateRunRequest, RunStatus, ToolCall, ToolResult, ToolSpec, Usage
 from harness.app import create_app
 from harness.config import HarnessSettings
 from harness.context import ContextBuilder
@@ -46,6 +46,31 @@ async def test_multi_turn_tool_run_preserves_order_and_events():
     assert any(item["round"] == 2 and item["phase"] == "answer" for item in progress)
     entries = await store.session_entries(run.session_id)
     assert [entry.role for entry in entries] == ["user", "assistant", "tool", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_answer_duration_includes_queue_and_tools_and_is_frozen():
+    async def tool(args):
+        await asyncio.sleep(.02)
+        return ToolResult(ok=True, content="found")
+
+    store, executor = await build_executor([
+        [ProviderDelta(tool_calls=[ToolCall(name="lookup", arguments={})], usage=Usage(elapsed_ms=1))],
+        [ProviderDelta(text="done", usage=Usage(elapsed_ms=1))],
+    ], tool)
+    request = CreateRunRequest(task_id="duration", idempotency_key="duration", input="find it")
+    run, _ = await store.create_run(request.task_id, request.idempotency_key, None)
+    # Simulate time spent accepted, before executor acquires the session lock.
+    run.created_monotonic -= 1
+    await executor.execute(run.run_id, request)
+    elapsed = run.view().elapsed_ms
+    assert elapsed is not None and elapsed >= 1020
+    events = await store.events_after(run.run_id)
+    assert events[-1].type == "run.completed"
+    assert events[-1].payload["elapsed_ms"] == elapsed
+    assert sum(usage.elapsed_ms for usage in run.usages) == 2
+    await store.update_run(run.run_id, status=RunStatus.completed)
+    assert run.view().elapsed_ms == elapsed
 
 
 @pytest.mark.asyncio

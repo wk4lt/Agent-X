@@ -36,11 +36,12 @@ def _conversation_view(row: Conversation) -> ConversationView:
     return ConversationView(id=row.id, title=row.title, created_at=row.created_at, updated_at=row.updated_at)
 
 
-def _message_view(row: ConversationMessage) -> ConversationMessageView:
+def _message_view(row: ConversationMessage, elapsed_ms: int | None = None) -> ConversationMessageView:
     return ConversationMessageView(id=row.id, sequence=row.sequence, role=row.role, content=row.content,
                                    tool_calls=[ToolCall.model_validate(item) for item in row.tool_calls_json],
                                    tool_call_id=row.tool_call_id, tool_name=row.tool_name, run_id=row.run_id,
-                                   status=row.status, created_at=row.created_at)
+                                   status=row.status, created_at=row.created_at,
+                                   elapsed_ms=elapsed_ms if row.role == "assistant" and not row.tool_calls_json else None)
 
 
 class HistoryRepository:
@@ -139,13 +140,16 @@ class HistoryRepository:
         limit = max(1, min(limit, 200))
         async with self.sessions() as session:
             await self._owned_conversation(session, principal_id, conversation_id)
-            statement: Select = select(ConversationMessage).where(ConversationMessage.conversation_id == conversation_id)
+            statement: Select = select(ConversationMessage, ConversationRun.elapsed_ms).outerjoin(
+                ConversationRun, (ConversationRun.conversation_id == ConversationMessage.conversation_id) &
+                (ConversationRun.run_id == ConversationMessage.run_id)
+            ).where(ConversationMessage.conversation_id == conversation_id)
             if cursor is not None:
                 statement = statement.where(ConversationMessage.sequence > cursor)
-            rows = list((await session.scalars(statement.order_by(ConversationMessage.sequence).limit(limit + 1))).all())
+            rows = list((await session.execute(statement.order_by(ConversationMessage.sequence).limit(limit + 1))).all())
         page_rows, overflow = rows[:limit], rows[limit:]
-        return ConversationMessagePage(items=[_message_view(row) for row in page_rows],
-                                       next_cursor=str(page_rows[-1].sequence) if overflow and page_rows else None)
+        return ConversationMessagePage(items=[_message_view(row, elapsed_ms) for row, elapsed_ms in page_rows],
+                                       next_cursor=str(page_rows[-1][0].sequence) if overflow and page_rows else None)
 
     async def create_run_mapping(self, *, principal_id: str, conversation_id: str, task_id: str, run_id: str,
                                  session_id: str, project_id: str, user_input: str, request_key: str | None = None) -> None:
@@ -221,7 +225,8 @@ class HistoryRepository:
             statement = select(Conversation.id).where(Conversation.updated_at < cutoff)
             return list((await session.scalars(statement)).all())
 
-    async def append_harness_entries(self, principal_id: str, run_id: str, entries: list[SessionEntry]) -> None:
+    async def append_harness_entries(self, principal_id: str, run_id: str, entries: list[SessionEntry],
+                                     *, elapsed_ms: int | None = None) -> None:
         """Idempotently materialize finished structured Harness entries after SSE events."""
         async with self._write_lock:
             async with self.sessions.begin() as session:
@@ -230,6 +235,8 @@ class HistoryRepository:
                     Conversation.deleted_at.is_(None)))
                 if mapping is None:
                     raise HistoryNotFound
+                if elapsed_ms is not None:
+                    mapping.elapsed_ms = elapsed_ms
                 conversation = await self._owned_conversation(session, principal_id, mapping.conversation_id)
                 added = False
                 for entry in entries:

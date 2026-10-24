@@ -30,6 +30,13 @@ the context event values are explicitly estimates. `context.compaction.started`,
 `run.progress` is an operational, user-visible event containing `round`, `phase`, and a short Chinese
 status message. It reports context/model/tool/answer stages and never exposes hidden model reasoning.
 
+`RunView.elapsed_ms` and terminal `run.*` events expose the total time from run acceptance to
+termination, measured with a monotonic clock and frozen at the first terminal transition. This includes
+queueing, context preparation, all model turns, retries and tools; it is distinct from the duration of
+an individual model request in `usage.updated`. The backend stores this value on the conversation run
+and returns it on final assistant messages as `elapsed_ms`, so Web UI answer footers survive reloads
+and Harness restarts. Older records without timing metadata return null and show no duration.
+
 Conversation messages are stored in increasing `sequence` order. They preserve assistant `tool_calls`
 and tool `tool_call_id`/`tool_name` fields rather than flattening tools into display text. The backend
 persists the complete Harness Session entries before forwarding `assistant.message` or `run.completed`

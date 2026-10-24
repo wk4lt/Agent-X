@@ -70,6 +70,7 @@ class ConversationRun(Base):
     input: Mapped[str] = mapped_column(Text, nullable=False)
     request_key: Mapped[str | None] = mapped_column(String(200), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer)
 
 
 def create_database(settings: HistorySettings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:

@@ -148,8 +148,9 @@ def create_app(client: HarnessClient | None = None, workspace_root: Path | None 
                         run_id=mapping.run_id, run=run)
 
     async def persist_run_entries(principal_id: str, run_id: str) -> None:
+        run = await app.state.client.get_run(run_id)
         entries = await app.state.client.session_entries(run_id)
-        await app.state.history.append_harness_entries(principal_id, run_id, entries)
+        await app.state.history.append_harness_entries(principal_id, run_id, entries, elapsed_ms=run.elapsed_ms)
 
     def schedule_terminal_persistence(principal_id: str, run_id: str) -> None:
         async def watch() -> None:

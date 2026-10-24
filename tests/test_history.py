@@ -96,6 +96,35 @@ def test_log_identifiers_survive_unavailable_harness(tmp_path, monkeypatch):
             assert task["task_id"] == created["task_id"]
 
 
+def test_answer_duration_is_persisted_through_sse_and_survives_harness_restart(tmp_path):
+    class TimedHarness(FakeHarness):
+        async def session_entries(self, run_id):
+            return [SessionEntry(id=f"answer-{run_id}", role="assistant", content="done")]
+
+        async def events(self, run_id, cursor):
+            self.runs[run_id].status = RunStatus.completed
+            self.runs[run_id].elapsed_ms = 12_345
+            yield b'event: run.completed\ndata: {"type":"run.completed","payload":{"elapsed_ms":12345}}\n\n'
+
+    harness = TimedHarness()
+    app = create_app(client=harness, history_settings=settings_for(tmp_path), workspace_root=tmp_path / "work",
+                     log_root=tmp_path / "logs")
+    with TestClient(app) as browser:
+        task = browser.post("/api/tasks", json={"input": "hello"}).json()
+        events = browser.get(f"/api/tasks/{task['task_id']}/events")
+        assert events.status_code == 200 and '"elapsed_ms":12345' in events.text
+        assert browser.get(f"/api/tasks/{task['task_id']}").json()["run"]["elapsed_ms"] == 12_345
+
+        async def unavailable(_run_id):
+            raise httpx.ConnectError("harness restarted")
+
+        harness.get_run = unavailable
+        messages = browser.get(f"/api/conversations/{task['conversation_id']}/messages").json()["items"]
+        assert messages[-1]["content"] == "done"
+        assert messages[-1]["elapsed_ms"] == 12_345
+        assert messages[0]["elapsed_ms"] is None
+
+
 @pytest.mark.asyncio
 async def test_migration_and_structured_messages_keep_tool_pair_and_raw_history(tmp_path):
     settings = settings_for(tmp_path)
@@ -121,6 +150,19 @@ async def test_migration_and_structured_messages_keep_tool_pair_and_raw_history(
     assert [item.sequence for item in page.items] == [1, 2, 3, 4]
     assert page.items[1].tool_calls[0].id == page.items[2].tool_call_id == "call_1"
     assert page.items[-1].content == "done"
+    assert all(item.elapsed_ms is None for item in page.items)
+    # Duration can arrive after entries were materialized by assistant.message.
+    await repository.append_harness_entries(principal, "run_1", entries, elapsed_ms=12_345)
+    # A subsequent replay without timing metadata must not erase it.
+    await repository.append_harness_entries(principal, "run_1", entries)
+    restored = HistoryRepository(sessions, settings)
+    timed_page = await restored.list_messages(principal, conversation.id, None, limit=3)
+    assert timed_page.next_cursor == "3"
+    assert all(item.elapsed_ms is None for item in timed_page.items)
+    final_page = await restored.list_messages(principal, conversation.id, 3)
+    assert len(final_page.items) == 1
+    assert final_page.items[0].elapsed_ms == 12_345
+    assert final_page.items[0].content == "done"
     await asyncio.gather(
         repository.create_run_mapping(principal_id=principal, conversation_id=conversation.id, task_id="task_2",
                                       run_id="run_2", session_id="session_2", project_id="default", user_input="two"),
