@@ -222,6 +222,7 @@ class RunView(BaseModel):
     failure_code: str | None = None
     failure_message: str | None = None
     final_answer: str | None = None
+    elapsed_ms: int | None = Field(default=None, ge=0)
     created_at: datetime
     updated_at: datetime
     workspace_id: str | None = None
@@ -267,6 +268,7 @@ class ConversationMessageView(BaseModel):
     run_id: str | None = None
     status: str
     created_at: datetime
+    elapsed_ms: int | None = Field(default=None, ge=0)
 
 
 class ConversationMessagePage(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from contracts.models import (
     SessionEntry,
     ToolCallStatus,
     Usage,
+    TERMINAL_STATUSES,
     new_id,
     utcnow,
 )
@@ -31,6 +33,9 @@ class RunRecord:
     failure_code: str | None = None
     failure_message: str | None = None
     final_answer: str | None = None
+    elapsed_ms: int | None = None
+    # Includes queueing, context preparation, all model turns and tools.
+    created_monotonic: float = field(default_factory=time.monotonic)
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime = field(default_factory=utcnow)
     cancelled: bool = False
@@ -44,7 +49,7 @@ class RunRecord:
             run_id=self.run_id, task_id=self.task_id, session_id=self.session_id,
             status=self.status, stop_reason=self.stop_reason, failure_stage=self.failure_stage,
             failure_code=self.failure_code, failure_message=self.failure_message,
-            final_answer=self.final_answer,
+            final_answer=self.final_answer, elapsed_ms=self.elapsed_ms,
             created_at=self.created_at, updated_at=self.updated_at, workspace_id=self.workspace_id,
         )
 
@@ -123,6 +128,8 @@ class InMemorySessionStore:
         record = await self.get_run(run_id)
         if status is not None:
             record.status = status
+            if status in TERMINAL_STATUSES and record.elapsed_ms is None:
+                record.elapsed_ms = max(0, int((time.monotonic() - record.created_monotonic) * 1000))
         if stop_reason is not None:
             record.stop_reason = stop_reason
         if failure_stage is not None:
@@ -145,6 +152,8 @@ class InMemorySessionStore:
         async with self._lock:
             record = await self.get_run(run_id)
             events = self._events[run_id]
+            if event_type in {f"run.{status.value}" for status in TERMINAL_STATUSES}:
+                payload = {**payload, "elapsed_ms": record.elapsed_ms}
             event = EventEnvelope(task_id=record.task_id, run_id=run_id, sequence=len(events) + 1,
                                   type=event_type, payload=payload)
             events.append(event)
